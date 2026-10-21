@@ -722,6 +722,43 @@ class Fn:
 
     def simd(self, w, pc):
         rd, rn, rm = bits(w, 4, 0), bits(w, 9, 5), bits(w, 20, 16)
+
+        # ARMv8 crypto extension. Scarlet's SDK uses these for AES/SHA and
+        # carry-less polynomial multiplication; emit ordinary native helper
+        # calls, not runtime decoding/JIT.
+        fixed = w & 0xfffffc00
+        if fixed == 0x4e284800:                           # AESE
+            return 'v_crypto_aese(&c->v[%d], &c->v[%d], 0);' % (rd, rn)
+        if fixed == 0x4e285800:                           # AESD
+            return 'v_crypto_aese(&c->v[%d], &c->v[%d], 1);' % (rd, rn)
+        if fixed == 0x4e286800:                           # AESMC
+            return 'v_crypto_aesmc(&c->v[%d], &c->v[%d], 0);' % (rd, rn)
+        if fixed == 0x4e287800:                           # AESIMC
+            return 'v_crypto_aesmc(&c->v[%d], &c->v[%d], 1);' % (rd, rn)
+        sha3 = w & 0xffe0fc00
+        if sha3 == 0x5e000000:                           # SHA1C
+            return 'v_crypto_sha1_3(&c->v[%d], &c->v[%d], &c->v[%d], 0);' % (rd, rn, rm)
+        if sha3 == 0x5e001000:                           # SHA1P
+            return 'v_crypto_sha1_3(&c->v[%d], &c->v[%d], &c->v[%d], 1);' % (rd, rn, rm)
+        if sha3 == 0x5e002000:                           # SHA1M
+            return 'v_crypto_sha1_3(&c->v[%d], &c->v[%d], &c->v[%d], 2);' % (rd, rn, rm)
+        if sha3 == 0x5e003000:                           # SHA1SU0
+            return 'v_crypto_sha1su0(&c->v[%d], &c->v[%d], &c->v[%d]);' % (rd, rn, rm)
+        if sha3 == 0x5e004000:                           # SHA256H
+            return 'v_crypto_sha256h(&c->v[%d], &c->v[%d], &c->v[%d], 0);' % (rd, rn, rm)
+        if sha3 == 0x5e005000:                           # SHA256H2
+            return 'v_crypto_sha256h(&c->v[%d], &c->v[%d], &c->v[%d], 1);' % (rd, rn, rm)
+        if sha3 == 0x5e006000:                           # SHA256SU1
+            return 'v_crypto_sha256su1(&c->v[%d], &c->v[%d], &c->v[%d]);' % (rd, rn, rm)
+        if fixed == 0x5e280800:                          # SHA1H
+            return 'v_crypto_sha1h(&c->v[%d], &c->v[%d]);' % (rd, rn)
+        if fixed == 0x5e281800:                          # SHA1SU1
+            return 'v_crypto_sha1su1(&c->v[%d], &c->v[%d]);' % (rd, rn)
+        if fixed == 0x5e282800:                          # SHA256SU0
+            return 'v_crypto_sha256su0(&c->v[%d], &c->v[%d]);' % (rd, rn)
+        if (w & 0xbfe0fc00) == 0x0ee0e000:              # PMULL / PMULL2 (64-bit polynomial)
+            return 'v_crypto_pmull64(&c->v[%d], &c->v[%d], &c->v[%d], %d);' % (
+                rd, rn, rm, bits(w, 30, 30))
         if (w & 0x9ff80c00) == 0x0f000400:               # movi / mvni / orr-imm (modified immediate)
             q, op, cmode = bits(w, 30, 30), bits(w, 29, 29), bits(w, 15, 12)
             imm8 = (bits(w, 18, 16) << 5) | bits(w, 9, 5)
