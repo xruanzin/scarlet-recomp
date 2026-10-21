@@ -1029,7 +1029,13 @@ static const ImportDef cxxrt_fill[] = {
     {"_ZNSt13runtime_errorD1Ev", logic_dtor}, {"_ZNSt13runtime_errorD2Ev", logic_dtor}, {"_ZNKSt13runtime_error4whatEv", logic_what},
 };
 
+#ifdef SCARLET_RECOMP
+static void cxxrt_selftest(void) {
+    printf("C++ runtime self-test is SSBU-only and is disabled for Scarlet\n");
+}
+#else
 static void cxxrt_selftest(void);
+#endif
 
 void register_cxxrt_imports(void) {
     register_imports(cxxrt_replace, (int)(sizeof cxxrt_replace / sizeof cxxrt_replace[0]));
@@ -1049,4 +1055,6 @@ void register_cxxrt_imports(void) {
     if (getenv("SSBU_CXXRT_SELFTEST")) cxxrt_selftest();
 }
 
+#ifndef SCARLET_RECOMP
 #include "cxxrt_selftest.h"
+#endif
