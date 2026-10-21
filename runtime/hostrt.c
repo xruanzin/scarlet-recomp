@@ -28,8 +28,13 @@ uint64_t guest_cntpct(void) {
         InterlockedExchange(&ready, 1);
     }
     QueryPerformanceCounter(&now);
-    return (uint64_t)(((__int128)now.QuadPart * 19200000ULL) /
-                      (uint64_t)freq.QuadPart);
+    {
+        uint64_t ticks = (uint64_t)now.QuadPart;
+        uint64_t hz = (uint64_t)freq.QuadPart;
+        uint64_t whole = ticks / hz;
+        uint64_t rem = ticks % hz;
+        return whole * 19200000ULL + (rem * 19200000ULL) / hz;
+    }
 }
 
 #ifdef SCARLET_RECOMP
