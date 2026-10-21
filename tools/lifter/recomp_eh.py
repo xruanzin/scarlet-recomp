@@ -249,7 +249,8 @@ def main(outdir, jobs):
     env = Env()
     env.imports = set()
     env.full = True
-    starts = sorted(set(env.compute_starts()) | set(info['starts']))
+    starts = sorted(a for a in (set(env.compute_starts()) | set(info['starts']))
+                    if BASE + recomp.MODULE_HEADER_END <= a < BASE + TEXT_SIZE)
     env.starts = starts
     print('function entries: %d  (%.0fs)' % (len(starts), time.time() - t0))
     os.makedirs(outdir, exist_ok=True)
@@ -267,7 +268,8 @@ def main(outdir, jobs):
                 total += n
                 bad += b
                 bad_reasons.update(reasons)
-                new.update(w for w in wanted if w not in known and BASE <= w < BASE + TEXT_SIZE)
+                new.update(w for w in wanted
+                           if w not in known and BASE + recomp.MODULE_HEADER_END <= w < BASE + TEXT_SIZE)
             all_funcs += pending
             print('discovery: %d functions, %d extra branch targets  (%.0fs)' % (len(pending), len(new), time.time() - t0))
             known |= new
