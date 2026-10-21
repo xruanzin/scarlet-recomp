@@ -1085,20 +1085,37 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
             }
         }
 
+        uint64_t fn_sym_addr = 0, lr_sym_addr = 0;
+        const char *fn_sym = scarlet_symbolize_static_address(c->fn, &fn_sym_addr);
+        const char *lr_sym = scarlet_symbolize_static_address(c->x[30], &lr_sym_addr);
         if (readable) {
             unsigned module = result & 0x1ffu;
             unsigned description = (result >> 9) & 0x1fffu;
             fprintf(stderr,
-                    "Scarlet svcBreak: reason=%llx result=0x%08x (%04u-%04u; module=%u desc=%u) info=%llx size=%llx guest=f_%llx lr=%llx\n",
+                    "Scarlet svcBreak: reason=%llx result=0x%08x (%04u-%04u; module=%u desc=%u) info=%llx size=%llx guest=f_%llx%s%s+0x%llx lr=%llx%s%s+0x%llx\n",
                     (unsigned long long)reason, result, 2000u + module, description,
                     module, description, (unsigned long long)info,
                     (unsigned long long)size, (unsigned long long)c->fn,
-                    (unsigned long long)c->x[30]);
+                    fn_sym ? " [" : "", fn_sym ? fn_sym : "",
+                    (unsigned long long)(fn_sym ? c->fn - fn_sym_addr : 0),
+                    (unsigned long long)c->x[30],
+                    lr_sym ? " [" : "", lr_sym ? lr_sym : "",
+                    (unsigned long long)(lr_sym ? c->x[30] - lr_sym_addr : 0));
+            if (fn_sym || lr_sym) {
+                fprintf(stderr, "Scarlet svcBreak symbols: fn=%s @ %llx (+%llx), lr=%s @ %llx (+%llx)\n",
+                        fn_sym ? fn_sym : "?", (unsigned long long)fn_sym_addr,
+                        (unsigned long long)(fn_sym ? c->fn - fn_sym_addr : 0),
+                        lr_sym ? lr_sym : "?", (unsigned long long)lr_sym_addr,
+                        (unsigned long long)(lr_sym ? c->x[30] - lr_sym_addr : 0));
+            }
             trace_printf(
-                    "Scarlet svcBreak reason=%llx result=%08x code=%04u-%04u info=%llx size=%llx f_%llx lr=%llx\n",
+                    "Scarlet svcBreak reason=%llx result=%08x code=%04u-%04u info=%llx size=%llx f_%llx(%s+%llx) lr=%llx(%s+%llx)\n",
                     (unsigned long long)reason, result, 2000u + module, description,
                     (unsigned long long)info, (unsigned long long)size,
-                    (unsigned long long)c->fn, (unsigned long long)c->x[30]);
+                    (unsigned long long)c->fn, fn_sym ? fn_sym : "?",
+                    (unsigned long long)(fn_sym ? c->fn - fn_sym_addr : 0),
+                    (unsigned long long)c->x[30], lr_sym ? lr_sym : "?",
+                    (unsigned long long)(lr_sym ? c->x[30] - lr_sym_addr : 0));
         } else {
             fprintf(stderr,
                     "Scarlet svcBreak: reason=%llx info=%llx size=%llx (info unreadable) guest=f_%llx lr=%llx\n",
