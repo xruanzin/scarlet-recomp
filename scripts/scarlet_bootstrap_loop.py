@@ -119,14 +119,16 @@ def latest_log(build):
 
 def inspect_log(path):
     if not path:
-        return None, 0
+        return None, 0, False
     try:
         text = open(path, encoding="utf-8", errors="replace").read()
     except OSError:
-        return None, 0
+        return None, 0, False
     hits = UNKNOWN_RE.findall(text)
     frames = [int(x) for x in FRAME_RE.findall(text)]
-    return (int(hits[-1], 16) if hits else None), (frames[-1] if frames else 0)
+    app_aborted = ("SetTerminateResult = 0x000002a2" in text or
+                   "result=0x000002a2" in text)
+    return (int(hits[-1], 16) if hits else None), (frames[-1] if frames else 0), app_aborted
 
 
 def main(argv=None):
@@ -152,12 +154,20 @@ def main(argv=None):
     for round_no in range(1, max(1, a.max_rounds) + 1):
         print("\n[scarlet-loop] ===== boot round %d =====" % round_no, flush=True)
         env = dict(os.environ)
-        env["SCARLET_FORCE_BOOT"] = "1"
+        env.pop("SCARLET_FORCE_BOOT", None)
         env.pop("SCARLET_IPC_BOOT_TRACE", None)
+        print("[scarlet-loop] trying normal nn::init::Start first", flush=True)
         run([project_python(), os.path.join(REPO, "scripts", "run.py"), "--play"], env=env)
 
         log = latest_log(build)
-        target, frames = inspect_log(log)
+        target, frames, app_aborted = inspect_log(log)
+        if not frames and target is None and app_aborted:
+            print("[scarlet-loop] normal boot still returned ApplicationAborted; retrying this round with force boot", flush=True)
+            env["SCARLET_FORCE_BOOT"] = "1"
+            run([project_python(), os.path.join(REPO, "scripts", "run.py"), "--play"], env=env)
+            log = latest_log(build)
+            target, frames, app_aborted = inspect_log(log)
+
         if frames:
             print("[scarlet-loop] SUCCESS/PROGRESS: %d frame(s) presented. Latest log: %s" %
                   (frames, log), flush=True)
