@@ -892,6 +892,16 @@ int (*g_svc_handler)(Ctx *, uint32_t);          /* skyline.c: the kernel calls p
 #define SCARLET_GUEST_LO   0x7000000000ULL
 #define SCARLET_GUEST_HI   0x7320000000ULL
 static uint64_t g_scarlet_heap_size;
+void scarlet_heap_note_committed(uint64_t end) {
+    if (end <= SCARLET_HEAP_BASE || end > SCARLET_HEAP_BASE + SCARLET_HEAP_MAX) return;
+    uint64_t want = end - SCARLET_HEAP_BASE;
+    volatile LONG64 *p = (volatile LONG64 *)&g_scarlet_heap_size;
+    for (;;) {
+        uint64_t old = (uint64_t)InterlockedCompareExchange64(p, 0, 0);
+        if (old >= want) break;
+        if ((uint64_t)InterlockedCompareExchange64(p, (LONG64)want, (LONG64)old) == old) break;
+    }
+}
 static uint64_t g_scarlet_user_exception_ctx;
 static uint64_t g_scarlet_rng = 0x9e3779b97f4a7c15ULL;
 /* Horizon metadata for the process main thread (main.npdm: priority 44,
