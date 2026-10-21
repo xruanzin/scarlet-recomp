@@ -31,7 +31,7 @@ static inline int64_t vsext(uint64_t x, int sz) {
 /* AArch64 FMAX/FMIN propagate NaN; the NM variants return the number: exact versions in fpexact.h (fp_maxmin32 / 64). */
 
 enum { F_ADD, F_SUB, F_MUL, F_DIV, F_MLA, F_MLS, F_MAX, F_MIN, F_MAXNM, F_MINNM, F_ABD,
-       F_CMEQ, F_CMGE, F_CMGT, F_RECPS, F_RSQRTS, F_ADDP,
+       F_CMEQ, F_CMGE, F_CMGT, F_ACGE, F_ACGT, F_RECPS, F_RSQRTS, F_ADDP,
        F_MAXP, F_MINP, F_MAXNMP, F_MINNMP };
 
 static inline float f3s(int op, float acc, float a, float b, uint32_t *mask, int *is_mask) {
@@ -52,6 +52,8 @@ static inline float f3s(int op, float acc, float a, float b, uint32_t *mask, int
     case F_CMEQ: *is_mask = 1; *mask = a == b ? ~0u : 0; return 0;
     case F_CMGE: *is_mask = 1; *mask = a >= b ? ~0u : 0; return 0;
     case F_CMGT: *is_mask = 1; *mask = a > b ? ~0u : 0; return 0;
+    case F_ACGE: *is_mask = 1; *mask = fabsf(a) >= fabsf(b) ? ~0u : 0; return 0;
+    case F_ACGT: *is_mask = 1; *mask = fabsf(a) > fabsf(b) ? ~0u : 0; return 0;
     }
     return 0;
 }
@@ -73,6 +75,8 @@ static inline double f3d(int op, double acc, double a, double b, uint64_t *mask,
     case F_CMEQ: *is_mask = 1; *mask = a == b ? ~0ull : 0; return 0;
     case F_CMGE: *is_mask = 1; *mask = a >= b ? ~0ull : 0; return 0;
     case F_CMGT: *is_mask = 1; *mask = a > b ? ~0ull : 0; return 0;
+    case F_ACGE: *is_mask = 1; *mask = fabs(a) >= fabs(b) ? ~0ull : 0; return 0;
+    case F_ACGT: *is_mask = 1; *mask = fabs(a) > fabs(b) ? ~0ull : 0; return 0;
     }
     return 0;
 }
@@ -257,7 +261,8 @@ enum {
     IX2_SHSUB, IX2_UHSUB, IX2_SABD, IX2_UABD,
     IX2_MUL, IX2_MLA, IX2_MLS,
     IX2_SQADD, IX2_UQADD, IX2_SQSUB, IX2_UQSUB,
-    IX2_SQDMULH, IX2_SQRDMULH
+    IX2_SQDMULH, IX2_SQRDMULH,
+    IX2_SQSHL, IX2_UQSHL, IX2_SQRSHL, IX2_UQRSHL
 };
 
 static inline void v_i3_extra(V128 *d, const V128 *pn, const V128 *pm,
@@ -291,6 +296,37 @@ static inline void v_i3_extra(V128 *d, const V128 *pn, const V128 *pm,
             __int128 p = (__int128)sx * sy * 2;
             if (op == IX2_SQRDMULH) p += (__int128)1 << (ebits - 1);
             z = v_sat_s(p >> ebits, ebits);
+            break;
+        }
+        case IX2_SQSHL:
+        case IX2_SQRSHL: {
+            int sh = (int8_t)uy;
+            if (sh >= 0) {
+                if (sh >= ebits) z = sx > 0 ? v_sat_s(((__int128)1 << ebits), ebits)
+                                             : sx < 0 ? v_sat_s(-((__int128)1 << ebits), ebits) : 0;
+                else z = v_sat_s((__int128)sx << sh, ebits);
+            } else {
+                int rs = -sh;
+                if (rs >= ebits) rs = ebits;
+                __int128 v = sx;
+                if (op == IX2_SQRSHL && rs > 0) v += (__int128)1 << (rs - 1);
+                z = v >> rs;
+            }
+            break;
+        }
+        case IX2_UQSHL:
+        case IX2_UQRSHL: {
+            int sh = (int8_t)uy;
+            if (sh >= 0) {
+                if (sh >= ebits) z = ux ? v_umax_bits(ebits) : 0;
+                else z = v_sat_u((__int128)((unsigned __int128)ux << sh), ebits);
+            } else {
+                int rs = -sh;
+                if (rs >= ebits) rs = ebits;
+                unsigned __int128 v = ux;
+                if (op == IX2_UQRSHL && rs > 0) v += (unsigned __int128)1 << (rs - 1);
+                z = v >> rs;
+            }
             break;
         }
         }
