@@ -1192,10 +1192,31 @@ class Env:
                 exports.add(BASE + value)
         starts |= exports
 
+        # Late indirect-call targets discovered by real boot runs. These are
+        # genuine code entry points that static BL/reloc/materialisation scans
+        # can miss (for example SDK thunks reached through opaque tables).
+        # RECOMP_EXTRA_STARTS accepts comma/space/semicolon-separated guest
+        # absolute addresses or module-relative offsets.
+        extra = set()
+        raw_extra = os.environ.get('RECOMP_EXTRA_STARTS', '')
+        for tok in re.split(r'[\s,;]+', raw_extra.strip()):
+            if not tok:
+                continue
+            try:
+                v = int(tok, 0)
+            except ValueError:
+                raise SystemExit('bad RECOMP_EXTRA_STARTS value: %r' % tok)
+            a = v if v >= BASE else BASE + v
+            if BASE + MODULE_HEADER_END <= a < BASE + TEXT_SIZE and a % 4 == 0:
+                extra.add(a)
+            else:
+                raise SystemExit('RECOMP_EXTRA_STARTS outside %s text: %#x' % (MODULE, v))
+        starts |= extra
+
         if MODULE != 'main' or os.environ.get('RECOMP_STARTS_VERBOSE'):
             print('function-start sources %s: BL=%d reloc=%d (rejected padding=%d) materialised=%d (rejected padding=%d) exports=%d'
                   % (MODULE, len(direct), len(reloc_candidates), reloc_rejected,
-                     len(materialised), materialised_rejected, len(exports)))
+                     len(materialised), materialised_rejected, len(exports)) + (' extra=%d' % len(extra) if extra else ''))
         self.starts = sorted(a for a in starts
                              if BASE + MODULE_HEADER_END <= a < BASE + TEXT_SIZE)
         return self.starts
