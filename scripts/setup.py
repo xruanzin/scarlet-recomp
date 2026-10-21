@@ -833,44 +833,47 @@ def check_dump(cx):
     romfs = a.romfs or (os.path.join(dump, 'romfs') if dump else None)
     if not exefs or not romfs:
         raise Fail('--dump <folder> is required (or --exefs and --romfs)')
-    for f in ('main', 'sdk'):
-        if not os.path.isfile(os.path.join(exefs, f)):
-            raise Fail('%s not found: the ExeFS folder needs the files main and sdk' % os.path.join(exefs, f))
-    if not os.path.isfile(os.path.join(romfs, 'data.arc')):
-        raise Fail('%s not found: the RomFS folder needs data.arc' % os.path.join(romfs, 'data.arc'))
-    arc, size = os.path.join(romfs, 'data.arc'), 0
-    try:                                          # a dump cut short: good header, missing end (testers, 2026-10-20)
-        size = os.path.getsize(arc)
-        with open(arc, 'rb') as f:
-            hdr = struct.unpack('<7Q', f.read(0x38))
-            f.seek(hdr[4])
-            m, _, comp, _ = struct.unpack('<4I', f.read(16))
-        whole = hdr[0] == 0xABCDEF9876543210 and max(hdr[1:6]) + 16 <= size and m == 0x10 and hdr[4] + 16 + comp <= size
-    except (OSError, struct.error):
-        whole = False
-    if not whole:
-        raise Fail('%s is incomplete (%.1f GB): the game files were not unpacked to the end (a full disk, or the window '
-                   'closed while unpacking). Delete the dump folder and run the installer again, with about 17 GB free.'
-                   % (arc, size / 2 ** 30))
+    if not os.path.isdir(exefs):
+        raise Fail('ExeFS folder not found: %s' % exefs)
+    if not os.path.isdir(romfs):
+        raise Fail('RomFS folder not found: %s' % romfs)
+
+    missing = [name for name in profile.REQUIRED_EXEFS
+               if not os.path.isfile(os.path.join(exefs, name))]
+    if missing:
+        raise Fail('Scarlet ExeFS is missing: %s (required: %s)' %
+                   (', '.join(missing), ', '.join(profile.REQUIRED_EXEFS)))
+
+    # Validate the known Scarlet main immediately. This rejects an SSBU/other
+    # dump before any expensive dependency/build work reaches the lifter.
+    try:
+        from scarlet_ingest import read_nso_build_id
+        build_id = read_nso_build_id(os.path.join(exefs, 'main'))
+    except Exception as e:
+        raise Fail('could not read Scarlet main Build ID: %s' % e)
+    if not profile.matches_main_build_id(build_id):
+        raise Fail('unsupported main Build ID %s; Scarlet Recomp bootstrap currently supports %s (%s)' %
+                   (build_id, profile.MAIN_BUILD_ID, profile.BASE_VERSION))
+
     cx.state['dump'] = {'exefs': os.path.abspath(exefs), 'romfs': os.path.abspath(romfs)}
+    cx.state['scarlet_main_build_id'] = build_id
     sysdata = a.sysdata or (os.path.join(dump, 'sysdata') if dump else None)
     if sysdata and os.path.isdir(os.path.join(sysdata, 'fonts')):
         cx.state['dump']['sysdata'] = os.path.abspath(sysdata)
-        say('  dump: exefs, romfs, sysdata (fonts%s)' % (', zoneinfo' if os.path.isdir(os.path.join(sysdata, 'zoneinfo')) else ''))
+        say('  Scarlet %s dump: exefs, romfs, sysdata (fonts%s)' %
+            (profile.BASE_VERSION, ', zoneinfo' if os.path.isdir(os.path.join(sysdata, 'zoneinfo')) else ''))
     else:
-        say('  dump: exefs, romfs   (no sysdata\\fonts: the open-source fonts of runtime\\fonts_open are used, staged beside the exe; '
-            'no Chinese, Japanese or Korean characters. Your console\'s own: tools/extract/fw_fonts.py, BUILDING.md)')
+        say('  Scarlet %s dump: exefs, romfs; main Build ID %s' %
+            (profile.BASE_VERSION, build_id[:16]))
         shipped = os.path.join(REPO, 'runtime', 'fonts_open')
         if not os.path.isdir(shipped) or sum(n.lower().endswith('.ttf') for n in os.listdir(shipped)) < 7:
-            raise Fail('runtime\\fonts_open lacks its 7 font files and the dump has no sysdata\\fonts: the game would stop at start. '
-                       'Restore the folder (scripts/update.py, git) or make it with tools/extract/open_fonts.py')
+            raise Fail('runtime\\fonts_open lacks its font files and the dump has no sysdata\\fonts')
     if a.sdk_roots:
         if not os.path.isfile(a.sdk_roots):
             raise Fail('--sdk-roots file not found')
         cx.state['sdk_roots'] = os.path.abspath(a.sdk_roots)
     elif not cx.state.get('sdk_roots'):
         cx.state['sdk_roots'] = os.path.join(REPO, 'tools', 'lifter', 'sdklift_roots.txt')
-
 
 def copy_if_changed(src, dst):
     if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
@@ -1028,7 +1031,7 @@ def build_env(cx):
         return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL=game_lib(cx), RECOMP_NRO_SUFFIX='_eh_o2', RECOMP_TARGET='macos', RECOMP_INLINE=inline_flag(cx),
                       RECOMP_LIFT_JOBS=str(cx.lift_jobs))
     # FFMPEG_ROOT: build.py compiles the movie fallback (mf_ffmpeg.c) with the headers install.py put in deps\ffmpeg
-    return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL='ssbu_game_eh_o1.dll', RECOMP_NRO_SUFFIX='_eh_o2',
+    return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL=game_lib(cx), RECOMP_NRO_SUFFIX='_eh_o2',
                   RECOMP_INLINE=inline_flag(cx),
                   FFMPEG_ROOT=os.environ.get('FFMPEG_ROOT') or os.path.join(REPO, 'deps', 'ffmpeg'))
 
@@ -1083,7 +1086,7 @@ def step_link(cx):
                 shutil.copy2(os.path.join(cx.runtime_dir, name), os.path.join(cx.work, name))
                 if sha256_file(os.path.join(cx.work, name)) != files[name]['sha256']:
                     raise Fail('%s does not match the runtime package after copying' % name)
-        for f in (EXE, 'SDL3.dll', 'ssbu_glslang.dll', 'ssbu_game_eh_o1.dll'):
+        for f in (EXE, 'SDL3.dll', 'ssbu_glslang.dll', game_lib(cx)):
             if not os.path.exists(os.path.join(cx.work, f)):
                 raise Fail('%s was not produced' % f)
         opus = [n for n in files if n.lower() in ('opus.dll', 'libopus-0.dll')]
@@ -1092,7 +1095,7 @@ def step_link(cx):
             opus = [os.path.basename(src) if os.path.basename(src).lower() in ('opus.dll', 'libopus-0.dll') else 'opus.dll']
             shutil.copy2(src, os.path.join(cx.work, opus[0]))
         say('  %s, SDL3.dll, ssbu_glslang.dll from the runtime package%s; ssbu_game_eh_o1.dll %.0f MB linked here' % (
-            EXE, ', ' + opus[0] + ' (music)' if opus else '', os.path.getsize(os.path.join(cx.work, 'ssbu_game_eh_o1.dll')) / 1048576.0))
+            EXE, ', ' + opus[0] + ' (music)' if opus else '', os.path.getsize(os.path.join(cx.work, game_lib(cx))) / 1048576.0))
         if not opus:
             say('  WARNING: no libopus (neither in the runtime package nor in deps\\opus): music and the other Opus sounds will be silent')
         copy_ffmpeg(cx)
@@ -1101,7 +1104,7 @@ def step_link(cx):
     cx.run('link', [os.environ.get('COMSPEC', 'cmd.exe'), '/c', os.path.join(cx.work, 'build_glslang.bat')], env=cx.env())
     cx.run('link', [sys.executable, 'build.py', 'link'], env=cx.env(**{k: v for k, v in build_env(cx).items() if k != 'RECOMP_NRO_SUFFIX'}, RECOMP_EXE=EXE))
     exe = os.path.join(cx.work, EXE)
-    for f in (EXE, 'SDL3.dll', 'ssbu_glslang.dll', 'ssbu_game_eh_o1.dll'):
+    for f in (EXE, 'SDL3.dll', 'ssbu_glslang.dll', game_lib(cx)):
         if not os.path.exists(os.path.join(cx.work, f)):
             raise Fail('%s was not produced' % f)
     opus = cx.tools.get('opus')
@@ -1324,7 +1327,7 @@ def main():
     # a finished build whose game files have gone since (an antivirus quarantines the 500 MB unsigned game DLL, or a
     # copy was interrupted): compile (the objects are kept, so only the DLL is linked again) and link run again
     if 'link' in done and not a.dry_run:
-        gone = [f for f in ((EXE, 'ssbu_game_eh_o1.dll', 'SDL3.dll') if not cx.posix else (LINUX_EXE, game_lib(cx), 'ssbu_glslang' + lib_ext(cx)))
+        gone = [f for f in ((EXE, game_lib(cx), 'SDL3.dll') if not cx.posix else (LINUX_EXE, game_lib(cx), 'ssbu_glslang' + lib_ext(cx)))
                 if not os.path.exists(os.path.join(cx.work, f))]
         if gone:
             say('%s missing from %s although the build was finished (an antivirus may have removed it: Windows Security > '
