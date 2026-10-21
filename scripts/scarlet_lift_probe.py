@@ -25,6 +25,24 @@ def jobs_default():
     return max(1, min(6, cpu))
 
 
+def late_targets_for(name):
+    vals = set(getattr(profile, "LATE_INDIRECT_STARTS", {}).get(name, ()))
+    path = os.path.join(REPO, "build", "scarlet_late_targets.txt")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) != 2 or parts[0] != name:
+                    continue
+                try:
+                    vals.add(int(parts[1], 0))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return tuple(sorted(vals))
+
+
 def run_module(name, bin_dir, out_root, jobs):
     lifter_dir = os.path.join(REPO, "tools", "lifter")
     out = os.path.join(out_root, name)
@@ -33,7 +51,7 @@ def run_module(name, bin_dir, out_root, jobs):
     env["RECOMP_BIN"] = bin_dir
     env["RECOMP_MODULE"] = name
     env["RECOMP_BASE"] = hex(profile.MODULE_BASES[name])
-    late = getattr(profile, "LATE_INDIRECT_STARTS", {}).get(name, ())
+    late = late_targets_for(name)
     if late:
         env["RECOMP_EXTRA_STARTS"] = ",".join(hex(x) for x in late)
         print("late indirect starts:", env["RECOMP_EXTRA_STARTS"], flush=True)
@@ -56,7 +74,7 @@ def run_module(name, bin_dir, out_root, jobs):
     if code:
         return {"module": name, "ok": False, "code": code}
 
-    late = getattr(profile, "LATE_INDIRECT_STARTS", {}).get(name, ())
+    late = late_targets_for(name)
     if late:
         table_path = os.path.join(out, "table.c")
         try:
