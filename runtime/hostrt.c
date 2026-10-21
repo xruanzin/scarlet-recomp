@@ -8,9 +8,16 @@
 #include <dbghelp.h>                                /* minidump types; dbghelp.dll itself is loaded only when a dump is written */
 #include "runtime.h"
 #include "hostrt.h"
+#ifdef SCARLET_RECOMP
+#include "scarlet_loader.h"
+#endif
 
 #define FILE_OFF 0x1000ULL
+#ifdef SCARLET_RECOMP
+#define IMAGE_SIZE 0x10000000ULL         /* main + sdk + subsdk0 fixed Scarlet window */
+#else
 #define IMAGE_SIZE 0x7500000ULL          /* the whole image with bss: 13.0.4 and 13.0.5 both end below it */
+#endif
 
 /* ---------------------------------------------------------------- game builds (docs/VERSIONS.md)
  * The layout of main is read from main.elf (load_layout): its PT_LOAD segments (nso2elf.py writes text, read-only data,
@@ -532,6 +539,9 @@ void import_set_address(const char *name, void *addr) {
     if (!g_import_addr) g_import_addr = calloc((size_t)dyn_sym_count, sizeof *g_import_addr);
     for (int i = 0; i < dyn_sym_count; i++)
         if (!dyn_syms[i].defined && strcmp(dyn_syms[i].name, name) == 0) g_import_addr[i] = (uint64_t)(uintptr_t)addr;
+}
+uint64_t import_address_override(int sym) {
+    return g_import_addr && sym >= 0 && sym < dyn_sym_count ? g_import_addr[sym] : 0;
 }
 
 /* Address of the placeholder that stands for a data symbol of another module (IMPORT_SLOT bytes,
@@ -1170,11 +1180,20 @@ void runtime_init(const char *elf, const char *trace_path) {
     install_crash_handler();
 #endif
 
-    void *mem = VirtualAlloc((void *)GUEST_BASE, IMAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (mem != (void *)GUEST_BASE) { fprintf(stderr, "cannot map guest image at 0x%llx\n", GUEST_BASE); exit(1); }
-    /* data symbols provided by other modules: zero-filled placeholders, IMPORT_SLOT bytes each */
+    /* data symbols / selected host overrides use main's original dynsym
+     * placeholder numbering in both targets. */
     void *imp = VirtualAlloc((void *)IMPORT_BASE, (SIZE_T)dyn_sym_count * IMPORT_SLOT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (imp != (void *)IMPORT_BASE) { fprintf(stderr, "cannot map import area\n"); exit(1); }
+#ifdef SCARLET_RECOMP
+    if (!scarlet_load_static_modules(elf)) {
+        fprintf(stderr, "Scarlet static module load failed\n");
+        exit(1);
+    }
+    printf("Scarlet static image window mapped at 0x%llx; lifted functions: %d, main dynamic symbols: %d\n",
+           GUEST_BASE, fn_table_count, dyn_sym_count);
+#else
+    void *mem = VirtualAlloc((void *)GUEST_BASE, IMAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (mem != (void *)GUEST_BASE) { fprintf(stderr, "cannot map guest image at 0x%llx\n", GUEST_BASE); exit(1); }
     FILE *f = fopen(elf, "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", elf); exit(1); }
     load_layout(f, elf);
@@ -1195,9 +1214,6 @@ void runtime_init(const char *elf, const char *trace_path) {
             else if (type == 0x101 || type == 0x401 || type == 0x402) {
                 uint64_t s;
                 if (dyn_syms[sym].defined) { s = GUEST_BASE + dyn_syms[sym].value; sym_int++; }
-                /* An undefined WEAK symbol is null unless a module defines it. main has 14 (__rel_dyn/plt_start/end, nu::VirtualAllocHook,
-                 * nu::VirtualFreeHook, 8 glslc*; .dynsym of main at 0x4197610, recomp.py) and neither sdk nor subsdk0 exports any of them
-                 * (dynsym of both read 2026-10-08): the game's `if (hook)` tests are false, as on the console. */
                 else if ((rd8(GUEST_BASE + g_main.symtab + (uint64_t)sym * 24 + 4) >> 4) == 2 && !(g_import_addr && g_import_addr[sym])) { s = 0; sym_weak++; }
                 else { s = g_import_addr && g_import_addr[sym] ? g_import_addr[sym] : IMPORT_BASE + (uint64_t)sym * IMPORT_SLOT; sym_ext++; }
                 wr64(GUEST_BASE + off, s + (type == 0x101 ? (uint64_t)addend : 0));
@@ -1207,15 +1223,12 @@ void runtime_init(const char *elf, const char *trace_path) {
     printf("image mapped at 0x%llx: %llu relative relocations, %llu to own symbols, %llu to imported symbols, %llu to undefined weak symbols (null), %llu unhandled\n",
            GUEST_BASE, rel, sym_int, sym_ext, sym_weak, other);
     printf("lifted functions: %d   dynamic symbols: %d\n", fn_table_count, dyn_sym_count);
-    /* close5: page protection as the loader sets it on the console: the text and read-only data segments (program headers of
-     * main.elf: R-X 0x0..0x39c7e90, R-- 0x39c8000..0x4f15f60; the data segment starts at 0x4f16000) become read-only once the
-     * relocations are applied (all of them land in the data segment: the image would not load on the console otherwise), so a
-     * wild write into code or constants faults instead of corrupting silently. SSBU_NO_PROTECT=1 leaves the old mapping. */
     if (!getenv("SSBU_NO_PROTECT")) {
         DWORD oldp;
         if (!VirtualProtect((void *)GUEST_BASE, g_main.data_start, PAGE_READONLY, &oldp)) { fprintf(stderr, "cannot protect the image's text and read-only data\n"); exit(1); }
         printf("image protection: 0x%llx..0x%llx read-only (text, read-only data), data and bss read-write\n", GUEST_BASE, GUEST_BASE + g_main.data_start);
     }
+#endif
 }
 
 /* ---------------------------------------------------------------- fake audit (plan\FAKE_AUDIT.md)
