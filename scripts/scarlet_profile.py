@@ -38,3 +38,14 @@ def matches_main_build_id(value):
         value = value.hex()
     value = str(value).lower().replace("0x", "")
     return value == MAIN_BUILD_ID or value.startswith(MAIN_BUILD_ID_PREFIX)
+
+
+# Scarlet 1.0.0 overrides already validated in the legacy native port. Keep
+# these on the host fast path instead of converting their PLT imports to direct
+# calls into sdk. Additions must be profile/gameplay validated first.
+HLE_OVERRIDE_SYMBOLS = (
+    "_ZN2nn2os16GetCurrentThreadEv",
+    "_ZN2nn2os11GetTlsValueENS0_7TlsSlotE",
+    "memcpy",
+    "strcmp",
+)
