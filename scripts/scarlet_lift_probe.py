@@ -33,6 +33,9 @@ def run_module(name, bin_dir, out_root, jobs):
     env["RECOMP_BIN"] = bin_dir
     env["RECOMP_MODULE"] = name
     env["RECOMP_BASE"] = hex(profile.MODULE_BASES[name])
+    module_map = os.path.join(REPO, "build", "scarlet_module_map.json")
+    if os.path.isfile(module_map):
+        env["RECOMP_MODULE_MAP"] = module_map
     env["PYTHONUNBUFFERED"] = "1"
     cmd = [project_python(), os.path.join(lifter_dir, "recomp_eh.py"), out, str(jobs)]
     print("\n== %s @ %#x ==" % (name, profile.MODULE_BASES[name]), flush=True)
