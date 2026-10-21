@@ -131,8 +131,9 @@ def parse_module_eh():
                 if clause:
                     if terminate_pad(pad): n_term += 1
                     else: catchers.add(BASE + start)
-    print('exception tables of %s: %%d functions with an LSDA, %%d landing pads, %%d functions entered through nro_catch_call ' % MODULE
-          '(%d call-site records lead straight to __clang_call_terminate and need none)' % (len(starts), len(pads), len(catchers), n_term))
+    print(('exception tables of %s: %d functions with an LSDA, %d landing pads, %d functions entered through nro_catch_call '
+           '(%d call-site records lead straight to __clang_call_terminate and need none)') %
+          (MODULE, len(starts), len(pads), len(catchers), n_term))
     return {'pads': sorted(pads), 'catchers': sorted(catchers), 'starts': sorted(starts)}
 
 
