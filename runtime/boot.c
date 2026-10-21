@@ -479,11 +479,19 @@ static void launch_defaults(void) {
     if (*p++ != ':') return;
     p = json_blank(p);
     if (*p != '"' || !json_path(p, g_state_romfs, sizeof g_state_romfs, &g_state_romfs_lossy)) { g_state_romfs[0] = 0; return; }     /* not a string (null) */
+#ifdef SCARLET_RECOMP
+    DWORD attr = g_state_romfs[0] && !g_state_romfs_lossy ? GetFileAttributesA(g_state_romfs) : INVALID_FILE_ATTRIBUTES;
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        _putenv_s("SSBU_ROMFS", g_state_romfs);
+        printf("SSBU_ROMFS not set: Scarlet RomFS taken from ..\\state.json\n");
+    }
+#else
     snprintf(probe, sizeof probe, "%s\\data.arc", g_state_romfs);
     if (g_state_romfs[0] && !g_state_romfs_lossy && GetFileAttributesA(probe) != INVALID_FILE_ATTRIBUTES) {
         _putenv_s("SSBU_ROMFS", g_state_romfs);
         printf("SSBU_ROMFS not set: taken from ..\\state.json\n");
     }
+#endif
 }
 /* The message of a start that cannot work, on the console and on stderr. A box on the screen as well, unless the run is a
  * scripted one or SSBU_ERROR_DIALOG=0 (the rule of nnmisc.c err_dialog: tests never hang on a dialog). Exit code 2. */
