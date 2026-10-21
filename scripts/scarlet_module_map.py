@@ -109,6 +109,7 @@ def build_map(bin_dir):
                 "value": e["value"],
                 "size": e["size"],
                 "type": e["type"],
+                "bind": e["bind"],
                 "in_text": e["in_text"],
             })
 
@@ -123,17 +124,28 @@ def build_map(bin_dir):
             unique_addr = {x["address"] for x in candidates}
             if len(unique_addr) == 1:
                 target = candidates[0]
+                target = dict(target)
+                target["resolution"] = "unique"
                 r[imp["name"]] = target
             elif not candidates:
                 u.append(imp["name"])
             else:
-                a[imp["name"]] = candidates
+                # Horizon's static NSO lookup, and the proven Scarlet legacy
+                # loader, search loaded modules in order. Scarlet loads
+                # main -> sdk -> subsdk0, so duplicate global definitions
+                # such as operator new/delete bind to the first provider.
+                rank = {module: i for i, module in enumerate(profile.STATIC_MODULES)}
+                ordered = sorted(candidates, key=lambda x: rank.get(x["module"], 1 << 30))
+                target = dict(ordered[0])
+                target["resolution"] = "module-load-order"
+                target["alternatives"] = ordered[1:]
+                r[imp["name"]] = target
         resolutions[name] = r
         unresolved[name] = sorted(set(u))
         ambiguous[name] = a
 
     return {
-        "format": 1,
+        "format": 2,
         "game": profile.GAME_NAME,
         "version": profile.BASE_VERSION,
         "main_build_id": profile.MAIN_BUILD_ID,
@@ -173,11 +185,16 @@ def main(argv=None):
             print("\n  %s unresolved external imports (%d):" % (name, len(unresolved)))
             for symbol in unresolved:
                 print("    " + symbol)
-        if ambiguous:
-            print("\n  %s ambiguous sibling imports (%d):" % (name, len(ambiguous)))
-            for symbol, targets in sorted(ambiguous.items()):
-                desc = ", ".join("%s@%#x" % (t["module"], t["address"]) for t in targets)
-                print("    %s -> %s" % (symbol, desc))
+        ordered = [(symbol, target) for symbol, target in result["resolutions"][name].items()
+                   if target.get("resolution") == "module-load-order"]
+        if ordered:
+            print("\n  %s duplicate imports resolved by module load order (%d):" % (name, len(ordered)))
+            for symbol, target in sorted(ordered):
+                alts = ", ".join("%s@%#x" % (t["module"], t["address"])
+                                 for t in target.get("alternatives", []))
+                print("    %s -> %s@%#x%s" %
+                      (symbol, target["module"], target["address"],
+                       (" (before " + alts + ")") if alts else ""))
     return 0
 
 
