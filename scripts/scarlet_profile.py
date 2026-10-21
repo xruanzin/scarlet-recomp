@@ -23,7 +23,7 @@ STATIC_MODULES = ("main", "sdk", "subsdk0")
 # so regenerating a module rewrites only the affected source bucket(s).
 LATE_INDIRECT_STARTS = {
     "main": (),
-    "sdk": (0x700657C59C,),
+    "sdk": (0x700657C59C, 0x700657CED8),
     "subsdk0": (),
 }
 
