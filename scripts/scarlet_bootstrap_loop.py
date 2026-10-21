@@ -88,8 +88,17 @@ def run(cmd, env=None):
 def refresh_missing(build, dump, jobs):
     targets = read_targets(build)
     dirty = []
+    expected_rev = getattr(profile, "LIFT_ABI_REV", "")
     for module, addrs in targets.items():
-        if any(not table_has(build, module, a) for a in addrs):
+        rev_ok = True
+        if expected_rev:
+            try:
+                got_rev = open(os.path.join(build, "lift", module, ".scarlet_lift_rev"),
+                               encoding="utf-8").read().strip()
+            except OSError:
+                got_rev = ""
+            rev_ok = got_rev == expected_rev
+        if not rev_ok or any(not table_has(build, module, a) for a in addrs):
             dirty.append(module)
     if not dirty:
         return True
