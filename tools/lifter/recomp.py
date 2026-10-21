@@ -319,6 +319,12 @@ class Fn:
             return SET(bits(w, 4, 0), 1, '0x10ULL')     # dczid_el0: DC ZVA prohibited
         if (w & 0xffffffe0) == 0xd53b0020:
             return SET(bits(w, 4, 0), 1, '0x8444c004ULL') # ctr_el0: Cortex-A57/Tegra X1 cache geometry
+        if (w & 0xffffffe0) == 0xd53be020:
+            return SET(bits(w, 4, 0), 1, 'guest_cntpct()') # cntpct_el0: 19.2 MHz Switch generic timer
+        if (w & 0xffffffe0) == 0xd51b4200:
+            return 'set_nzcv(c, (int)((%s >> 28) & 0xf));' % X(bits(w, 4, 0)) # msr nzcv, xN
+        if (w & 0xffffffe0) in (0xd50b7e20, 0xd50b7b20, 0xd50b7520):
+            return ';'                                   # dc civac / dc cvau / ic ivau: host caches are coherent; guest A64 code is AOT
         if (w & 0xffffffe0) in (0xd53b4400, 0xd53b4420):
             return SET(bits(w, 4, 0), 1, '0ULL')        # fpcr / fpsr read
         if (w & 0xffffffe0) in (0xd51b4400, 0xd51b4420):
@@ -895,6 +901,7 @@ class Fn:
                       (0, 1, 0x1d): 'F1_RECPE', (0, 0, 0x1d): 'F1_SCVTF', (1, 0, 0x1d): 'F1_UCVTF', (0, 1, 0x1b): 'F1_CVTZS',
                       (1, 1, 0x1b): 'F1_CVTZU', (0, 1, 0x0d): 'F1_CMEQ0', (0, 1, 0x0c): 'F1_CMGT0', (1, 1, 0x0c): 'F1_CMGE0',
                       (0, 1, 0x0e): 'F1_CMLT0', (1, 1, 0x0d): 'F1_CMLE0',
+                      (0, 0, 0x1c): 'F1_CVTAS',
                       (0, 0, 0x19): 'F1_FRINTM', (0, 1, 0x19): 'F1_FRINTZ'}.get((u, a, opc))
                 if op:
                     return 'v_f1v(%s, %s, %s, %d, %d);' % (V(rd), V(rn), op, sz, fcount())
@@ -903,6 +910,11 @@ class Fn:
                 if (u, opc) == (1, 0x13) and not scalar and size < 3:   # SHLL
                     return 'v_shll(%s, %s, %d, %d, 1, %d);' % (
                         V(rd), V(rn), 8 << size, size, q)
+                if scalar and size < 3:
+                    if (u, opc) == (1, 0x12):             # scalar SQXTUN
+                        return 'v_sat_narrow_scalar(%s, %s, %d, 2);' % (V(rd), V(rn), size)
+                    if opc == 0x14:                       # scalar SQXTN/UQXTN
+                        return 'v_sat_narrow_scalar(%s, %s, %d, %d);' % (V(rd), V(rn), size, 1 if u else 0)
                 if not scalar and size < 3:
                     if (u, opc) == (1, 0x12):             # SQXTUN / SQXTUN2
                         return 'v_sat_narrow(%s, %s, %d, 2, %d);' % (V(rd), V(rn), size, q)
@@ -924,8 +936,8 @@ class Fn:
                 if (u, opc) in ((0, 0x16), (0, 0x17)) and not scalar and a == 0:   # fcvtn(2) / fcvtl(2): sz 0 half <-> single, 1 single <-> double
                     return 'v_%s(%s, %s, %d, %d);' % ('fcvtl' if opc == 0x17 else 'fcvtn', V(rd), V(rn), sz, q)
                 op = {(1, 0x05): 'I1_NOT', (0, 0x05): 'I1_CNT', (1, 0x0b): 'I1_NEG', (0, 0x0b): 'I1_ABS',
-                      (0, 0x09): 'I1_CMEQ0', (0, 0x00): 'I1_REV64'}.get((u, opc))
-                if op is None or (op in ('I1_NOT', 'I1_CNT') and size):
+                      (0, 0x09): 'I1_CMEQ0', (0, 0x00): 'I1_REV64', (0, 0x01): 'I1_REV16'}.get((u, opc))
+                if op is None or (op in ('I1_NOT', 'I1_CNT') and size) or (op == 'I1_REV16' and size != 0):
                     raise Unimpl('simd-misc')
                 return 'v_i1v(%s, %s, %s, %d, %d);' % (V(rd), V(rn), op, size, icount(size))
             if bits(w, 20, 17) == 8 and bits(w, 11, 10) == 2:
@@ -976,6 +988,16 @@ class Fn:
             raise Unimpl('simd-e')
         if bits(w, 10, 10) == 0:                          # by element
             iopc = bits(w, 15, 12)
+            long_elem = {0x2: 'VL_MLAL', 0x6: 'VL_MLSL', 0xa: 'VL_MULL'}.get(iopc)
+            if long_elem and not scalar and size in (1, 2):
+                if size == 1:
+                    vm = bits(w, 19, 16)
+                    idx = (bits(w, 11, 11) << 2) | (bits(w, 21, 21) << 1) | bits(w, 20, 20)
+                else:
+                    vm = bits(w, 20, 16)
+                    idx = (bits(w, 11, 11) << 1) | bits(w, 21, 21)
+                return 'v_long3_elem(%s, %s, %s, %d, %s, %d, %d, %d);' % (
+                    V(rd), V(rn), V(vm), idx, long_elem, size, u, q)
             iextra = {0x0: 'IX2_MLA', 0x4: 'IX2_MLS', 0x8: 'IX2_MUL',
                       0xc: 'IX2_SQDMULH', 0xd: 'IX2_SQRDMULH'}.get(iopc)
             if iextra and size in (1, 2):
@@ -1020,6 +1042,10 @@ class Fn:
             return 'v_sat_shift_narrow(%s, %s, %d, %d, %d, %d, %d, %d);' % (
                 V(rd), V(rn), (16 << es) - immhb, es, 1 if u else 0, opc & 1,
                 q if not scalar else 0, scalar)
+        if opc == 0x1f and not scalar and es in (2, 3) and not (es == 3 and not q): # FCVTZS/FCVTZU fixed-point
+            fbits = (16 << es) - immhb
+            return 'v_fcvt_fixed(%s, %s, %d, %d, %d, %d);' % (
+                V(rd), V(rn), 1 if es == 3 else 0, icount(es), fbits, u)
         raise Unimpl('simd-shift')
 
 
