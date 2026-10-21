@@ -783,6 +783,18 @@ void guest_unimpl(uint64_t pc, uint32_t insn, const char *what) {
 int (*g_svc_handler)(Ctx *, uint32_t);          /* skyline.c: the kernel calls plugin code makes (svcQueryMemory ...) */
 void guest_svc(Ctx *c, uint32_t number) {
     if (g_svc_handler && g_svc_handler(c, number)) return;
+#ifdef SCARLET_RECOMP
+    printf("\nScarlet SVC %02x at guest f_%llx lr=%llx: x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx\n",
+           number, (unsigned long long)c->fn, (unsigned long long)c->x[30],
+           (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+           (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+           (unsigned long long)c->x[4], (unsigned long long)c->x[5]);
+    trace_printf("Scarlet SVC %02x f_%llx lr=%llx x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx\n",
+                 number, (unsigned long long)c->fn, (unsigned long long)c->x[30],
+                 (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+                 (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+                 (unsigned long long)c->x[4], (unsigned long long)c->x[5]);
+#endif
     guest_trap("svc (direct kernel call)", number);
 }
 
