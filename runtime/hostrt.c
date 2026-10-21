@@ -798,6 +798,14 @@ int (*g_svc_handler)(Ctx *, uint32_t);          /* skyline.c: the kernel calls p
 static uint64_t g_scarlet_heap_size;
 static uint64_t g_scarlet_user_exception_ctx;
 static uint64_t g_scarlet_rng = 0x9e3779b97f4a7c15ULL;
+/* Horizon metadata for the process main thread (main.npdm: priority 44,
+ * default core 0). Until SVC CreateThread is reached, 0xFFFF8000 is the only
+ * kernel thread handle that the real SDK can refer to. */
+static int32_t g_scarlet_main_prio = 44;
+static int32_t g_scarlet_main_core = 0;
+static uint64_t g_scarlet_main_core_mask = 0xFULL;
+static uint64_t g_scarlet_main_tid = 0x50ULL;
+#define SCARLET_PSEUDO_THREAD 0xFFFF8000u
 
 static uint64_t scarlet_rng64(void) {
     LARGE_INTEGER q;
@@ -866,12 +874,75 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
         } else Sleep(0);
         return 1;
     }
+    case 0x0C: { /* GetThreadPriority(_, handle) */
+        uint32_t h = (uint32_t)x[1];
+        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        x[0] = 0;
+        x[1] = (uint64_t)(uint32_t)g_scarlet_main_prio;
+        trace_printf("Scarlet GetThreadPriority(current) -> %d\n", g_scarlet_main_prio);
+        return 1;
+    }
+    case 0x0D: { /* SetThreadPriority(handle, priority) */
+        uint32_t h = (uint32_t)x[0];
+        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        g_scarlet_main_prio = (int32_t)x[1];
+        x[0] = 0;
+        trace_printf("Scarlet SetThreadPriority(current,%d)\n", g_scarlet_main_prio);
+        return 1;
+    }
+    case 0x0E: { /* GetThreadCoreMask(_, _, handle) */
+        uint32_t h = (uint32_t)x[2];
+        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        x[0] = 0;
+        x[1] = (uint64_t)(uint32_t)g_scarlet_main_core;
+        x[2] = g_scarlet_main_core_mask;
+        trace_printf("Scarlet GetThreadCoreMask(current) -> ideal=%d mask=%llx\n",
+                     g_scarlet_main_core, (unsigned long long)g_scarlet_main_core_mask);
+        return 1;
+    }
+    case 0x0F: { /* SetThreadCoreMask(handle, ideal, mask) */
+        uint32_t h = (uint32_t)x[0];
+        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        int32_t ideal = (int32_t)x[1];
+        uint64_t mask = x[2];
+        if (ideal == -2) { /* IdealCoreUseDefaultValue */
+            g_scarlet_main_core = 0;
+            g_scarlet_main_core_mask = 1;
+        } else {
+            if (ideal != -3) { /* -3 = keep current ideal core */
+                if (ideal == -1) {
+                    if (mask) {
+                        int c = 0;
+                        while (c < 64 && !(mask & (1ULL << c))) c++;
+                        if (c < 64) g_scarlet_main_core = c;
+                    }
+                } else if (ideal >= 0 && ideal < 64) {
+                    g_scarlet_main_core = ideal;
+                }
+            }
+            if (mask) g_scarlet_main_core_mask = mask;
+        }
+        x[0] = 0;
+        trace_printf("Scarlet SetThreadCoreMask(current,ideal=%d,mask=%llx) -> core=%d mask=%llx\n",
+                     ideal, (unsigned long long)mask, g_scarlet_main_core,
+                     (unsigned long long)g_scarlet_main_core_mask);
+        return 1;
+    }
     case 0x10: /* GetCurrentProcessorNumber */
-        x[0] = GetCurrentProcessorNumber() & 3u; return 1;
+        x[0] = (uint64_t)(uint32_t)g_scarlet_main_core; return 1;
     case 0x1E: /* GetSystemTick */
         x[0] = guest_cntpct(); return 1;
     case 0x24: /* GetProcessId */
         x[0] = 0; x[1] = 0x81; return 1;
+    case 0x25: { /* GetThreadId(_, handle) */
+        uint32_t h = (uint32_t)x[1];
+        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        x[0] = 0;
+        x[1] = g_scarlet_main_tid;
+        trace_printf("Scarlet GetThreadId(current) -> %llx\n",
+                     (unsigned long long)g_scarlet_main_tid);
+        return 1;
+    }
     case 0x27: { /* OutputDebugString(ptr, size) */
         size_t len = (size_t)x[1];
         if (len > 4096) len = 4096;
