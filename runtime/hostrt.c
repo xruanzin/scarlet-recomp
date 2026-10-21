@@ -781,9 +781,165 @@ void guest_unimpl(uint64_t pc, uint32_t insn, const char *what) {
     report_and_exit(3);
 }
 int (*g_svc_handler)(Ctx *, uint32_t);          /* skyline.c: the kernel calls plugin code makes (svcQueryMemory ...) */
+
+#ifdef SCARLET_RECOMP
+/* Minimal Horizon kernel surface needed by Scarlet's real SDK bootstrap.
+ * Complex object/IPC/thread SVCs are deliberately NOT faked here: an unknown
+ * one still reaches the diagnostic trap below. Values/layout match the proven
+ * Scarlet runtime's process model. */
+#define SCARLET_ALIAS_BASE 0x7100000000ULL
+#define SCARLET_ALIAS_SIZE 0x0100000000ULL
+#define SCARLET_HEAP_BASE  0x7240000000ULL
+#define SCARLET_HEAP_MAX   0x00CD500000ULL
+#define SCARLET_STACK_BASE 0x7200000000ULL
+#define SCARLET_STACK_SIZE 0x0040000000ULL
+#define SCARLET_GUEST_LO   0x7000000000ULL
+#define SCARLET_GUEST_HI   0x7320000000ULL
+static uint64_t g_scarlet_heap_size;
+static uint64_t g_scarlet_user_exception_ctx;
+static uint64_t g_scarlet_rng = 0x9e3779b97f4a7c15ULL;
+
+static uint64_t scarlet_rng64(void) {
+    LARGE_INTEGER q;
+    QueryPerformanceCounter(&q);
+    g_scarlet_rng ^= (uint64_t)q.QuadPart + (uint64_t)(uintptr_t)&q + guest_cntpct();
+    g_scarlet_rng ^= g_scarlet_rng >> 12;
+    g_scarlet_rng ^= g_scarlet_rng << 25;
+    g_scarlet_rng ^= g_scarlet_rng >> 27;
+    return g_scarlet_rng * 0x2545f4914f6cdd1dULL;
+}
+
+static int scarlet_svc_basic(Ctx *c, uint32_t n) {
+    uint64_t *x = c->x;
+    switch (n) {
+    case 0x01: { /* SetHeapSize(_, size) -> result, address */
+        uint64_t size = x[1];
+        if (size > SCARLET_HEAP_MAX) { x[0] = 0xD001; x[1] = 0; return 1; }
+        if (size > g_scarlet_heap_size) {
+            uint64_t add = size - g_scarlet_heap_size;
+            void *want = (void *)(uintptr_t)(SCARLET_HEAP_BASE + g_scarlet_heap_size);
+            void *p = VirtualAlloc(want, (SIZE_T)add, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            if (p != want) { x[0] = 0xD001; x[1] = 0; return 1; }
+        } else if (size < g_scarlet_heap_size) {
+            /* Keep already committed pages on shrink: guest-visible semantics
+             * only require the reported heap extent here, and avoiding a split
+             * decommit keeps later growth deterministic on Windows. */
+        }
+        g_scarlet_heap_size = size;
+        x[0] = 0; x[1] = SCARLET_HEAP_BASE;
+        trace_printf("Scarlet SVC SetHeapSize(%llx) -> %llx\n",
+                     (unsigned long long)size, (unsigned long long)SCARLET_HEAP_BASE);
+        return 1;
+    }
+    case 0x02: /* SetMemoryPermission */
+    case 0x03: /* SetMemoryAttribute */
+        x[0] = 0; return 1;
+    case 0x06: { /* QueryMemory(out_info, _, addr) */
+        uint64_t out = x[0], a = x[2];
+        uint64_t info[5] = {0};
+        if (a >= SCARLET_HEAP_BASE && a < SCARLET_HEAP_BASE + g_scarlet_heap_size) {
+            info[0] = SCARLET_HEAP_BASE; info[1] = g_scarlet_heap_size;
+            info[2] = 5; info[3] = 3;
+        } else if (a >= SCARLET_GUEST_LO && a < 0x7010000000ULL) {
+            info[0] = SCARLET_GUEST_LO; info[1] = 0x0100000000ULL;
+            info[2] = 3; info[3] = 1;
+        } else {
+            MEMORY_BASIC_INFORMATION mi;
+            if (VirtualQuery((void *)(uintptr_t)a, &mi, sizeof mi) && mi.State == MEM_COMMIT) {
+                info[0] = (uint64_t)(uintptr_t)mi.BaseAddress;
+                info[1] = (uint64_t)mi.RegionSize;
+                info[2] = 5;
+                info[3] = (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) ? 3 : 1;
+            } else {
+                info[0] = a & ~0xffffULL; info[1] = 0x10000; /* unmapped span, conservative */
+            }
+        }
+        memcpy((void *)(uintptr_t)out, info, sizeof info);
+        x[0] = 0; x[1] = 0;
+        return 1;
+    }
+    case 0x0B: { /* SleepThread */
+        int64_t ns = (int64_t)x[0];
+        if (ns > 0) {
+            DWORD ms = (DWORD)((ns + 999999) / 1000000);
+            Sleep(ms ? ms : 1);
+        } else Sleep(0);
+        return 1;
+    }
+    case 0x10: /* GetCurrentProcessorNumber */
+        x[0] = GetCurrentProcessorNumber() & 3u; return 1;
+    case 0x1E: /* GetSystemTick */
+        x[0] = guest_cntpct(); return 1;
+    case 0x24: /* GetProcessId */
+        x[0] = 0; x[1] = 0x81; return 1;
+    case 0x27: { /* OutputDebugString(ptr, size) */
+        size_t len = (size_t)x[1];
+        if (len > 4096) len = 4096;
+        char buf[4097];
+        if (x[0] && len) memcpy(buf, (const void *)(uintptr_t)x[0], len);
+        buf[len] = 0;
+        trace_printf("guest debug: %s\n", buf);
+        x[0] = 0;
+        return 1;
+    }
+    case 0x29: { /* GetInfo(_, id0, handle, id1) */
+        uint32_t id = (uint32_t)x[1];
+        uint64_t v = 0;
+        uint32_t r = 0;
+        switch (id) {
+        case 0: v = 0xF; break;
+        case 1: v = ~0ULL; break;
+        case 2: v = SCARLET_ALIAS_BASE; break;
+        case 3: v = SCARLET_ALIAS_SIZE; break;
+        case 4: v = SCARLET_HEAP_BASE; break;
+        case 5: v = SCARLET_HEAP_MAX; break;
+        case 6: case 21: v = 0xCD500000ULL; break;
+        case 7: case 22: v = g_scarlet_heap_size + 0x4000000ULL; break;
+        case 8: case 9: case 16: case 17: v = 0; break;
+        case 11: v = scarlet_rng64(); break;
+        case 12: v = SCARLET_GUEST_LO; break;
+        case 13: v = SCARLET_GUEST_HI - SCARLET_GUEST_LO; break;
+        case 14: v = SCARLET_STACK_BASE; break;
+        case 15: v = SCARLET_STACK_SIZE; break;
+        case 18: v = 0x0100A3D008C5C000ULL; break;
+        case 20:
+            if (!g_scarlet_user_exception_ctx) {
+                void *want = (void *)(uintptr_t)0x7091ff0000ULL;
+                void *p = VirtualAlloc(want, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                if (p == want) g_scarlet_user_exception_ctx = (uint64_t)(uintptr_t)p;
+            }
+            if (!g_scarlet_user_exception_ctx) r = 0xD001;
+            else v = g_scarlet_user_exception_ctx;
+            break;
+        default:
+            r = 0xF001;
+            trace_printf("Scarlet GetInfo unknown id=%u sub=%llx\n",
+                         id, (unsigned long long)x[3]);
+            break;
+        }
+        x[0] = r; x[1] = v;
+        trace_printf("Scarlet GetInfo id=%u sub=%llx -> r=%x value=%llx\n",
+                     id, (unsigned long long)x[3], r, (unsigned long long)v);
+        return 1;
+    }
+    case 0x2C: { /* MapPhysicalMemory(addr,size) */
+        void *want = (void *)(uintptr_t)x[0];
+        void *p = VirtualAlloc(want, (SIZE_T)x[1], MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        x[0] = (p == want) ? 0 : 0xD001;
+        return 1;
+    }
+    case 0x2D: /* UnmapPhysicalMemory: leave reservation intact for stability */
+        x[0] = 0; return 1;
+    default:
+        return 0;
+    }
+}
+#endif
+
 void guest_svc(Ctx *c, uint32_t number) {
     if (g_svc_handler && g_svc_handler(c, number)) return;
 #ifdef SCARLET_RECOMP
+    if (scarlet_svc_basic(c, number)) return;
     printf("\nScarlet SVC %02x at guest f_%llx lr=%llx: x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx\n",
            number, (unsigned long long)c->fn, (unsigned long long)c->x[30],
            (unsigned long long)c->x[0], (unsigned long long)c->x[1],
