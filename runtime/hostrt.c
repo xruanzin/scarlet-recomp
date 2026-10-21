@@ -13,6 +13,25 @@
 #endif
 
 #define FILE_OFF 0x1000ULL
+
+uint64_t guest_cntpct(void) {
+    /* Horizon/Switch exposes the Tegra generic timer at 19.2 MHz. Keep the
+     * guest-visible frequency stable while sourcing monotonic time from QPC. */
+    static LARGE_INTEGER freq;
+    static LONG ready;
+    LARGE_INTEGER now;
+    if (!ready) {
+        LARGE_INTEGER f;
+        if (!QueryPerformanceFrequency(&f) || !f.QuadPart)
+            return GetTickCount64() * 19200ULL;
+        freq = f;
+        InterlockedExchange(&ready, 1);
+    }
+    QueryPerformanceCounter(&now);
+    return (uint64_t)(((__int128)now.QuadPart * 19200000ULL) /
+                      (uint64_t)freq.QuadPart);
+}
+
 #ifdef SCARLET_RECOMP
 #define IMAGE_SIZE 0x10000000ULL         /* main + sdk + subsdk0 fixed Scarlet window */
 #else
