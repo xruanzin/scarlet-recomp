@@ -66,15 +66,56 @@ static int ensure_committed(uint64_t end) {
     uint64_t want = align_up(end, COMMIT_GRANULE);
     if (want > STD_LIMIT) want = STD_LIMIT;
     if (want <= g_committed) return 1;
-    SIZE_T bytes = (SIZE_T)(want - g_committed);
-    void *at = (void *)(uintptr_t)g_committed;
-    void *p = VirtualAlloc(at, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (p != at) {
-        if (p) VirtualFree(p, 0, MEM_RELEASE);
-        fprintf(stderr, "Scarlet StandardAllocator: cannot map guest heap %#llx..%#llx (err=%lu)\n",
-                (unsigned long long)g_committed, (unsigned long long)want, GetLastError());
-        return 0;
+
+    /* SetHeapSize in this runtime may already have reserved/committed part of
+     * the Scarlet heap. Do not try to MEM_RESERVE the same VA range again:
+     * that made the first real StandardAllocator allocation fail and libc++
+     * terminate during main DT_INIT. Walk the range and only perform the
+     * operation appropriate for each Windows VM state. */
+    uint64_t cur = g_committed;
+    while (cur < want) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((void *)(uintptr_t)cur, &mi, sizeof mi)) {
+            fprintf(stderr, "Scarlet StandardAllocator: VirtualQuery failed at %#llx (err=%lu)\n",
+                    (unsigned long long)cur, GetLastError());
+            return 0;
+        }
+        uint64_t region_end = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
+        uint64_t chunk_end = region_end < want ? region_end : want;
+        SIZE_T bytes = (SIZE_T)(chunk_end - cur);
+        void *at = (void *)(uintptr_t)cur;
+
+        if (mi.State == MEM_COMMIT) {
+            /* Already backed by SetHeapSize or an earlier allocation. */
+            DWORD prot = mi.Protect & 0xff;
+            if (!(prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE ||
+                  prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY)) {
+                DWORD oldp;
+                if (!VirtualProtect(at, bytes, PAGE_READWRITE, &oldp)) {
+                    fprintf(stderr, "Scarlet StandardAllocator: cannot make committed heap writable at %#llx (err=%lu)\n",
+                            (unsigned long long)cur, GetLastError());
+                    return 0;
+                }
+            }
+        } else if (mi.State == MEM_RESERVE) {
+            void *p = VirtualAlloc(at, bytes, MEM_COMMIT, PAGE_READWRITE);
+            if (p != at) {
+                fprintf(stderr, "Scarlet StandardAllocator: cannot commit reserved heap %#llx..%#llx (err=%lu)\n",
+                        (unsigned long long)cur, (unsigned long long)chunk_end, GetLastError());
+                return 0;
+            }
+        } else { /* MEM_FREE */
+            void *p = VirtualAlloc(at, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            if (p != at) {
+                if (p) VirtualFree(p, 0, MEM_RELEASE);
+                fprintf(stderr, "Scarlet StandardAllocator: cannot reserve guest heap %#llx..%#llx (err=%lu)\n",
+                        (unsigned long long)cur, (unsigned long long)chunk_end, GetLastError());
+                return 0;
+            }
+        }
+        cur = chunk_end;
     }
+
     g_committed = want;
     { extern void scarlet_heap_note_committed(uint64_t);
       scarlet_heap_note_committed(g_committed); }
