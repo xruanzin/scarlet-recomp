@@ -720,4 +720,17 @@ static inline void v_fcvtn(V128 *d, const V128 *pn, int dbl, int upper) {
     *d = r;
 }
 
+/* Non-inline crypto helpers live in neon_crypto.c so their tables/algorithms
+ * are emitted once in scarlet_game.dll instead of once per generated C file. */
+void v_crypto_aese(V128 *d, const V128 *key, int decrypt);
+void v_crypto_aesmc(V128 *d, const V128 *src, int inverse);
+void v_crypto_sha1_3(V128 *d, const V128 *n, const V128 *m, int kind);
+void v_crypto_sha1h(V128 *d, const V128 *n);
+void v_crypto_sha1su0(V128 *d, const V128 *n, const V128 *m);
+void v_crypto_sha1su1(V128 *d, const V128 *n);
+void v_crypto_sha256h(V128 *d, const V128 *n, const V128 *m, int second);
+void v_crypto_sha256su0(V128 *d, const V128 *n);
+void v_crypto_sha256su1(V128 *d, const V128 *n, const V128 *m);
+void v_crypto_pmull64(V128 *d, const V128 *n, const V128 *m, int upper);
+
 #endif
