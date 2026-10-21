@@ -70,7 +70,8 @@ def compile_one(name):
     obj = os.path.join(OBJ, name[:-2] + '.obj')
     t = time.time()
     # the dozen largest files hold functions clang 8 cannot optimise in reasonable time: keep them at -O0
-    opt = '-O0' if name in SLOW_FILES else OPT
+    base_name = name.split('_', 1)[1] if '_c_' in name else name
+    opt = '-O0' if name in SLOW_FILES or base_name in SLOW_FILES else OPT
     flags = [opt if f == '-O1' else f for f in CFLAGS] + NOCRT_FLAGS
     r = subprocess.run([CLANG] + flags + [src, '-o', obj], capture_output=True, text=True)
     return name, r.returncode, r.stderr[-2000:], time.time() - t
