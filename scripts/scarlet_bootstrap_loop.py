@@ -136,6 +136,8 @@ def main(argv=None):
     ap.add_argument("--dump", default=r"D:\Pokemon Scarlet\Extracted\Base")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--max-rounds", type=int, default=30)
+    ap.add_argument("--force-fallback", action="store_true",
+                    help="retry ApplicationAborted with SCARLET_FORCE_BOOT (diagnostic only)")
     ap.add_argument("--build", default=os.path.join(REPO, "build"))
     a = ap.parse_args(argv)
     build = os.path.abspath(a.build)
@@ -161,12 +163,16 @@ def main(argv=None):
 
         log = latest_log(build)
         target, frames, app_aborted = inspect_log(log)
-        if not frames and target is None and app_aborted:
-            print("[scarlet-loop] normal boot still returned ApplicationAborted; retrying this round with force boot", flush=True)
+        if not frames and target is None and app_aborted and a.force_fallback:
+            print("[scarlet-loop] normal boot returned ApplicationAborted; --force-fallback requested", flush=True)
             env["SCARLET_FORCE_BOOT"] = "1"
             run([project_python(), os.path.join(REPO, "scripts", "run.py"), "--play"], env=env)
             log = latest_log(build)
             target, frames, app_aborted = inspect_log(log)
+        elif not frames and target is None and app_aborted:
+            print("[scarlet-loop] stopped on original ApplicationAborted; force boot disabled by default.", flush=True)
+            print("[scarlet-loop] latest log:", log, flush=True)
+            return 0
 
         if frames:
             print("[scarlet-loop] SUCCESS/PROGRESS: %d frame(s) presented. Latest log: %s" %
