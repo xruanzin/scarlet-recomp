@@ -405,11 +405,26 @@ void icall_dump(FILE *out, uint64_t main_ctx) {
                     (unsigned long long)g_icall[i].x0, (unsigned long long)g_icall[i].x1, (unsigned long long)g_icall[i].x2);
 }
 
+static void scarlet_record_late_indirect(uint64_t addr) {
+#ifdef SCARLET_RECOMP
+    const ScarletStaticModule *m = scarlet_module_for_address(addr);
+    if (!m) return;
+    FILE *f = fopen("../scarlet_late_targets.txt", "a");
+    if (!f) return;
+    fprintf(f, "%s 0x%llx\n", m->name, (unsigned long long)addr);
+    fclose(f);
+    fprintf(stderr, "Scarlet late indirect target recorded: %s 0x%llx\n",
+            m->name, (unsigned long long)addr);
+#else
+    (void)addr;
+#endif
+}
+
 void call_indirect(Ctx *c, uint64_t addr) {
     if (g_icall_mode) icall_record(c, addr);
     if (addr - GUEST_BASE < IMAGE_SIZE) {            /* P3: the common case first (a function of main); the ranges tested below do not overlap it */
         void (*fn)(Ctx *) = lookup_guest(addr);
-        if (!fn) guest_trap("indirect call to an address that is not a known function", addr);
+        if (!fn) { scarlet_record_late_indirect(addr); guest_trap("indirect call to an address that is not a known function", addr); }
         fn(c);
         return;
     }
@@ -436,7 +451,7 @@ void call_indirect(Ctx *c, uint64_t addr) {
     if (nro_call_indirect(c, addr)) return;          /* a function of a run-time module (nnro.c) */
     if (addr >= 0x7500000000ULL && addr < 0x7500cfb000ULL) { sdk_dispatch(c, addr); return; }   /* lifted SDK code (sdklift_rt.c), e.g. a vtable entry of an SDK object */
     void (*fn)(Ctx *) = lookup_guest(addr);
-    if (!fn) guest_trap("indirect call to an address that is not a known function", addr);
+    if (!fn) { scarlet_record_late_indirect(addr); guest_trap("indirect call to an address that is not a known function", addr); }
     fn(c);
 }
 
