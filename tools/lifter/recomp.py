@@ -860,6 +860,9 @@ class Fn:
                     return 'v_f1v(%s, %s, %s, %d, %d);' % (V(rd), V(rn), op, sz, fcount())
                 if (u, opc) == (0, 0x12) and not scalar and size < 3:
                     return 'v_xtn(%s, %s, %d);' % (V(rd), V(rn), size)
+                if (u, opc) == (1, 0x13) and not scalar and size < 3:   # SHLL
+                    return 'v_shll(%s, %s, %d, %d, 1, %d);' % (
+                        V(rd), V(rn), 8 << size, size, q)
                 if not scalar and size < 3:
                     if (u, opc) == (1, 0x12):             # SQXTUN / SQXTUN2
                         return 'v_sat_narrow(%s, %s, %d, 2, %d);' % (V(rd), V(rn), size, q)
