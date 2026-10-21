@@ -66,20 +66,49 @@ def load_segments(data):
     return loads
 
 
+def dynamic_tags(data, sec):
+    dyn = sec[".dynamic"]
+    tags = {}
+    for off in range(dyn[4], dyn[4] + dyn[5], 16):
+        tag, value = struct.unpack_from("<qQ", data, off)
+        if tag == 0:
+            break
+        tags.setdefault(tag, value)
+    return tags
+
+
 def relocations(data, sec):
+    """Read the exact relocation tables runtime/scarlet_loader.c will use.
+
+    nso2elf intentionally does not create SHT_RELA sections: relocation bytes
+    remain inside the flat NSO memory image. DT_RELA/DT_JMPREL in .dynamic are
+    therefore the authoritative table locations.
+    """
+    tags = dynamic_tags(data, sec)
     rows = []
-    for name, sh in sec.items():
-        # SHT_RELA == 4. nso2elf writes both dynamic and PLT relocations as
-        # ordinary ELF RELA sections.
-        if sh[1] != 4:
+    tables = (
+        ("rela", tags.get(7, 0), tags.get(8, 0)),       # DT_RELA / DT_RELASZ
+        ("jmprel", tags.get(23, 0), tags.get(2, 0)),   # DT_JMPREL / DT_PLTRELSZ
+    )
+    ent = tags.get(9, 24)  # DT_RELAENT
+    if ent != 24:
+        raise RuntimeError("DT_RELAENT is %d, expected 24" % ent)
+    for name, addr, size in tables:
+        if not addr and not size:
             continue
-        entsz = sh[9] or 24
-        if entsz != 24:
-            raise RuntimeError("%s: RELA entry size %d" % (name, entsz))
-        for off in range(sh[4], sh[4] + sh[5], entsz):
+        if not addr or size % ent:
+            raise RuntimeError("%s has malformed address/size %#x/%#x" %
+                               (name, addr, size))
+        for guest_off in range(addr, addr + size, ent):
+            # nso2elf stores the complete NSO memory image at ELF file +0x1000.
+            off = 0x1000 + guest_off
+            if off + 24 > len(data):
+                raise RuntimeError("%s relocation %#x falls outside ELF image" %
+                                   (name, guest_off))
             where, info, addend = struct.unpack_from("<QQq", data, off)
             rows.append({
                 "section": name,
+                "table_address": guest_off,
                 "offset": where,
                 "type": info & 0xffffffff,
                 "sym": info >> 32,
@@ -148,6 +177,9 @@ def main(argv=None):
         image_end = max(x["vaddr"] + x["memsz"] for x in loads)
         slot_ok = base + image_end <= limit
         rows = relocations(data, sec)
+        if not rows:
+            print("  %-7s FAIL: dynamic relocation tables are empty" % module)
+            failures += 1
         counts = {}
         examples = {}
         for row in rows:
