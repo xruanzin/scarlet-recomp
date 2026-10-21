@@ -6,7 +6,11 @@
 #include <stdarg.h>
 #include "runtime.h"
 
+#ifdef SCARLET_RECOMP
+#define GUEST_BASE 0x7000000000ULL
+#else
 #define GUEST_BASE 0x7100000000ULL
+#endif
 #define IMPORT_BASE 0x7300000000ULL      /* placeholder addresses for symbols of other modules */
 #define IMPORT_SLOT 256ULL
 
@@ -29,6 +33,8 @@ void runtime_init(const char *elf, const char *trace_path);
 void *import_data(const char *name);
 /* Make an imported data symbol resolve to host memory (call before runtime_init). */
 void import_set_address(const char *name, void *addr);
+/* Nonzero only when import_set_address supplied a real host/data address. */
+uint64_t import_address_override(int sym);
 #include "game_data.h"                  /* SdkData; the tables below live in the game DLL (gamedll.c binds them) */
 extern GameData game_data;
 #define sdk_data (game_data.sdk_data_tab)
