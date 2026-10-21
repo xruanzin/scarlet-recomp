@@ -27,5 +27,8 @@ extern ScarletStaticModule g_scarlet_static_modules[SCARLET_STATIC_MODULE_COUNT]
 int scarlet_load_static_modules(const char *main_elf);
 uint64_t scarlet_find_static_symbol(const char *name);
 const ScarletStaticModule *scarlet_module_for_address(uint64_t addr);
+/* Nearest defined dynamic symbol at/below addr. Returns NULL if none; when
+ * sym_addr is non-NULL, receives the guest address of that symbol. */
+const char *scarlet_symbolize_static_address(uint64_t addr, uint64_t *sym_addr);
 
 #endif
