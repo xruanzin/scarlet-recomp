@@ -115,6 +115,9 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
     size_t input_size = domain_close ? 0 : tipc ? words * 4 : (raw_end - aligned - 4) * 4;
     size_t data_size = 0;
     trace_printf("Scarlet IPC handle=%x service=%u object=%u type=%u cmd=%u raw=%u\n", h, service, object_id, type, cmd, words);
+    if (getenv("SCARLET_IPC_BOOT_TRACE"))
+        printf("Scarlet IPC ok? handle=%x service=%u object=%u type=%u cmd=%u raw=%u\n",
+               h, service, object_id, type, cmd, words);
     if (domain_close) {
         /* Domain close has a header-only response. */
     } else if (type == 5 || type == 7) {
@@ -275,9 +278,13 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
         } else if (service == SERVICE_PCTL_CONTROL && cmd == 1032) {
             value = 0; data_size = 4;
         } else if (service == SERVICE_PCTL_CONTROL) {
-            /* Match the proven Scarlet runtime: remaining parental-control
-             * commands are accepted as no-ops for an unrestricted local user. */
-            trace_printf("Scarlet pctl cmd %u -> unrestricted/no-op\n", cmd);
+            /* Match the proven Scarlet runtime exactly: unknown parental
+             * control queries succeed with a 16-byte zeroed payload. Some SDK
+             * callers inspect that structure even when Result is success. */
+            memset(out_data, 0, 0x10);
+            out_ptr = out_data;
+            data_size = 0x10;
+            trace_printf("Scarlet pctl cmd %u -> unrestricted/16-byte zero payload\n", cmd);
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
