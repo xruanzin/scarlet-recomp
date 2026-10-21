@@ -985,13 +985,34 @@ def step_tables(cx):
 
 
 def step_lift(cx):
-    # Reuse the ssbu-recomp EH-aware lifter against Scarlet's real main guest
-    # address. Later phases apply the same module abstraction to sdk/subsdk0.
-    env = cx.env(RECOMP_MODULE='main', RECOMP_BASE=hex(profile.MODULE_BASES['main']))
-    out = cx.run('lift', [sys.executable, 'recomp_eh.py', 'gen_eh_o2', str(cx.lift_jobs)], env=env)
-    n = len([f for f in os.listdir(os.path.join(cx.work, 'gen_eh_o2')) if f.endswith('.c')])
-    say('  Scarlet main lifted at %#x into gen_eh_o2: %d C files (%.0f MB)' %
-        (profile.MODULE_BASES['main'], n, disk_mb(os.path.join(cx.work, 'gen_eh_o2'))))
+    # Scarlet has three static NSO modules. Lift each one at its real guest
+    # address, resolve sibling-module PLT imports through the generated symbol
+    # map, then combine the absolute-address C functions into one source tree.
+    module_map = os.path.join(cx.build, 'scarlet_module_map.json')
+    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_module_map.py'),
+                    '--bin', cx.bin, '--out', module_map], env=cx.env(), log='module_map')
+    lift_root = os.path.join(cx.work, 'lift_modules')
+    os.makedirs(lift_root, exist_ok=True)
+    total_files = 0
+    for module in profile.STATIC_MODULES:
+        outdir = os.path.join(lift_root, module)
+        env = cx.env(RECOMP_MODULE=module,
+                     RECOMP_BASE=hex(profile.MODULE_BASES[module]),
+                     RECOMP_MODULE_MAP=module_map)
+        cx.run('lift', [sys.executable, 'recomp_eh.py', outdir, str(cx.lift_jobs)],
+               env=env, log='lift_' + module)
+        n = len([name for name in os.listdir(outdir)
+                 if name.startswith('c_') and name.endswith('.c')])
+        total_files += n
+        say('  %-7s lifted at %#x: %d generated C files (%.0f MB)' %
+            (module, profile.MODULE_BASES[module], n, disk_mb(outdir)))
+    combined = os.path.join(cx.work, 'gen_eh_o2')
+    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_combine_lift.py'),
+                    '--lift', lift_root, '--out', combined, '--module-map', module_map],
+           env=cx.env(), log='combine_lift')
+    n = len([name for name in os.listdir(combined) if name.endswith('.c')])
+    say('  Scarlet combined lift: %d module C files -> %d combined C files (%.0f MB)' %
+        (total_files, n, disk_mb(combined)))
 
 
 def install_header(roots_text):
