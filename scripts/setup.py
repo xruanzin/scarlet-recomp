@@ -1041,8 +1041,9 @@ def step_lift(cx):
         if missing:
             raise Fail('--reuse-probe-lift requested but build\\lift is missing: ' + ', '.join(missing))
         stale = []
-        expected_rev = getattr(profile, 'LIFT_ABI_REV', '')
         for module in profile.STATIC_MODULES:
+            expected_rev = getattr(profile, 'LIFT_ABI_REV_BY_MODULE', {}).get(
+                module, getattr(profile, 'LIFT_ABI_REV', ''))
             if expected_rev:
                 rev_path = os.path.join(probe_root, module, '.scarlet_lift_rev')
                 try:
@@ -1105,6 +1106,8 @@ def step_lift(cx):
         env = cx.env(RECOMP_MODULE=module,
                      RECOMP_BASE=hex(profile.MODULE_BASES[module]),
                      RECOMP_MODULE_MAP=module_map)
+        if module == 'sdk':
+            env['RECOMP_SCARLET_STDALLOC'] = '1'
         late = scarlet_late_targets(module, cx.build)
         if late:
             env['RECOMP_EXTRA_STARTS'] = ','.join(hex(x) for x in late)
