@@ -13,6 +13,7 @@ import struct
 import sys
 import collections
 import json
+import re
 
 # Target selection. The original ssbu-recomp defaults are preserved so the
 # upstream lifter can still be compared directly, while game ports select a
