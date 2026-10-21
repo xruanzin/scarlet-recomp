@@ -78,6 +78,18 @@ int main(void) {
     ctx.x[0] = pctl_control; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = pctl; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
 
+    uint32_t applet = service(sm, "appletOE");
+    cmif(4, 0); send_request(applet); uint32_t proxy = msg[3]; assert(proxy);
+    cmif(4, 20); send_request(proxy); uint32_t appfn = msg[3]; assert(appfn);
+    cmif(4, 22); msg[1] = 9; msg[8] = 0; send_request(appfn); assert(msg[6] == 0);
+    cmif(4, 20); send_request(appfn); assert(msg[6] == 0 && msg[8] == 0);
+    cmif(4, 21); send_request(appfn); assert(msg[6] == 0);
+    cmif(4, 23); send_request(appfn); assert(msg[6] == 0);
+    cmif(4, 40); send_request(appfn); assert(msg[6] == 0);
+    ctx.x[0] = appfn; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
+    ctx.x[0] = proxy; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
+    ctx.x[0] = applet; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
+
     uint32_t apm = service(sm, "apm");
     cmif(4, 0); send_request(apm); uint32_t apm_session = msg[3];
     cmif(4, 0); msg[1] = 10; msg[8] = 1; msg[9] = 0x92220008; send_request(apm_session);
@@ -100,6 +112,6 @@ int main(void) {
     ctx.x[0] = e; scarlet_ipc_svc(&ctx, 0x16); assert(ctx.x[0] == 0);
     ctx.x[1] = (uintptr_t)&e; ctx.x[2] = 1; ctx.x[3] = 0;
     scarlet_ipc_svc(&ctx, 0x18); assert(ctx.x[0] == R_INVALID_HANDLE);
-    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, ECTX, PCTL, APM, close and event SVC tests passed");
+    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, ECTX, PCTL, application, APM, close and event SVC tests passed");
     return 0;
 }
