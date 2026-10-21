@@ -50,20 +50,18 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, 'scripts'))
 import build_location  # noqa: E402  (the install location chosen in the installer window)
+import scarlet_profile as profile  # noqa: E402
 STEPS =['deps', 'stage', 'convert', 'modules', 'tables', 'lift', 'sdk', 'compile', 'nro', 'link', 'check']
-# The game builds this port handles, told apart by the size of main's code (the first segment of the converted dump).
-# 13.0.4 is the reference build: the game addresses written in the runtime are 13.0.4 addresses, and GA() (runtime/hostrt.c)
-# gives their 13.0.5 counterparts (docs/VERSIONS.md says how they were found). sdk is the same module in both builds.
-GAME_BUILDS = {0x39c7e90: '13.0.4', 0x39c8440: '13.0.5'}
-SDK_TEXT_SIZE = 0x540950
-EXE = 'ssbu_native.exe'
+# Scarlet-specific identity/build/module constants live in scarlet_profile.py.
+# Do not key supported builds by text size: Build ID validation happens in scarlet_ingest.py.
+EXE = profile.WINDOWS_EXE
 # what step_stage copies into build/work: (repository folder, folder in work, only files ending with)
 STAGE_PLAN = [('runtime', '', None), ('tools/lifter', '', None), ('tools/nro', 'ro_study', '.py'), ('tools/audit', 'tools_audit', '.py'),
               ('fighter_sdk', 'fighter_sdk', None), ('tests', 'tests', None), ('mods', '', None)]
 # files the build writes that may sit in a source folder of an in-tree build (all ignored by git): not part of the tree
 GENERATED_NAMES = {'sdklift_gen.c', 'sdkdata.c', 'sdklift_install.h', 'zstd_gen.c', 'nro_registry.c', 'fake_whitelist.h', 'fake_openlist.h',
                    'difftest_gen.c', 'eh_tests.h', 'quad_tests.h', 'sdktest_data.h', 'imports_all.txt', 'sdklift_report.txt'}
-LINUX_EXE = 'ssbu_native'
+LINUX_EXE = 'scarlet_recomp'
 
 
 def exe_name(cx):
@@ -76,7 +74,7 @@ def lib_ext(cx):
 
 
 def game_lib(cx):
-    return 'ssbu_game_eh_o1' + lib_ext(cx)
+    return 'scarlet_game' + lib_ext(cx)
 
 
 # ---------------------------------------------------------------------------------------------- helpers
@@ -157,7 +155,7 @@ class Ctx:
 
     @property
     def bin(self):                               # the converted dump of the build found by the convert step
-        return os.path.join(self.build, 'binaries', self.state.get('game_version', '13.0.4'))
+        return os.path.join(self.build, 'binaries', self.state.get('game_version', profile.BASE_VERSION))
 
     def save(self):
         os.makedirs(self.build, exist_ok=True)
@@ -165,7 +163,7 @@ class Ctx:
             json.dump(self.state, f, indent=1)
 
     def env(self, **extra):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('RECOMP_', 'SSBU_'))}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('RECOMP_', 'SSBU_', 'SCARLET_'))}
         env['PYTHONIOENCODING'] = 'utf-8'
         env['PYTHONUNBUFFERED'] = '1'
         env['RECOMP_BIN'] = self.bin             # where the tools find main.elf and sdk.elf
@@ -909,58 +907,60 @@ def step_stage(cx):
 
 
 def step_convert(cx):
-    d = cx.state['dump']
-    conv = os.path.join(REPO, 'tools', 'extract', 'nso2elf.py')
-    tmp = os.path.join(cx.build, 'binaries', 'converting')
-    os.makedirs(tmp, exist_ok=True)
-    version = None
-    for name in ('main', 'sdk'):
-        out = cx.run('convert', [sys.executable, conv, os.path.join(d['exefs'], name), os.path.join(tmp, name + '.elf')], cwd=REPO, log='convert_' + name)
-        seg0 = next((l for l in out.splitlines() if l.startswith('seg 0')), '')
-        got = int(seg0.split('size ')[1].split()[0], 16) if 'size ' in seg0 else 0
-        known = GAME_BUILDS.get(got) if name == 'main' else got == SDK_TEXT_SIZE
-        if 'MISMATCH' in out or not known:
-            raise Fail('%s is not a build this port knows (code size %#x, or a segment hash mismatch): it handles Super Smash Bros. '
-                       'Ultimate %s (update applied). Your dump is from another version: usually an older update (13.0.3 or '
-                       'before) or the base game without its update. Fix: give the installer the base game AND the 13.0.4 '
-                       '(v1966080) or 13.0.5 update file instead of this dump folder, or dump again with that update installed'
-                       % (name, got, ' and '.join(sorted(GAME_BUILDS.values()))))
-        if name == 'main':
-            version = known
-        say('  %s -> %s.elf   code %.1f MB, segment hashes ok' % (name, name, got / 1048576.0))
-    if cx.state.get('game_version', version) != version:      # another build than the one the later steps were made from
-        for s in STEPS[STEPS.index('convert') + 1:]:
-            cx.state.setdefault('done', {}).pop(s, None)
-        say('  the dump is %s, the build folder held %s: every later step runs again' % (version, cx.state['game_version']))
-    cx.state['game_version'] = version
-    os.makedirs(cx.bin, exist_ok=True)
-    for name in os.listdir(tmp):
-        os.replace(os.path.join(tmp, name), os.path.join(cx.bin, name))
-    os.rmdir(tmp)
-    say('  game build %s -> %s' % (version, os.path.relpath(cx.bin, cx.build)))
-    for name in os.listdir(d['exefs']):                 # main.npdm (main thread stack size) and the other ExeFS files sit beside the ELFs
-        if os.path.isfile(os.path.join(d['exefs'], name)):
-            shutil.copy2(os.path.join(d['exefs'], name), os.path.join(cx.bin, name))
-    if not os.path.isfile(os.path.join(cx.bin, 'main.npdm')):
-        raise Fail('exefs\\main.npdm is missing: dump the whole ExeFS (main, sdk, rtld, subsdk0, main.npdm)')
-    if d.get('sysdata'):
-        for sub in ('fonts', 'zoneinfo'):
-            if os.path.isdir(os.path.join(d['sysdata'], sub)):
-                dst = os.path.join(cx.build, 'sysdata', sub)
-                if not os.path.isdir(dst):
-                    shutil.copytree(os.path.join(d['sysdata'], sub), dst)
+    """Scarlet ExeFS -> ELF using the ssbu-recomp NSO converter.
 
+    scarlet_ingest.py validates the known 1.0.0 main Build ID before writing
+    main.elf, sdk.elf and subsdk0.elf. Raw ExeFS files are kept beside them for
+    later loader/table work, as the upstream pipeline expects.
+    """
+    d = cx.state['dump']
+    tmp = os.path.join(cx.build, 'binaries', 'converting')
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, exist_ok=True)
+    ingest = os.path.join(REPO, 'scripts', 'scarlet_ingest.py')
+    out = cx.run('convert', [sys.executable, ingest, d['exefs'], '--out', tmp], cwd=REPO, log='convert_scarlet')
+    version = profile.BASE_VERSION
+
+    if cx.state.get('game_version', version) != version:
+        for step in STEPS[STEPS.index('convert') + 1:]:
+            cx.state.setdefault('done', {}).pop(step, None)
+        say('  dump build changed: every later step runs again')
+    cx.state['game_version'] = version
+
+    final = os.path.join(cx.build, 'binaries', version)
+    os.makedirs(final, exist_ok=True)
+    for name in os.listdir(tmp):
+        os.replace(os.path.join(tmp, name), os.path.join(final, name))
+    os.rmdir(tmp)
+
+    # Preserve the complete ExeFS input next to the generated ELFs. Nothing in
+    # this directory is committed; it is all derived from the user's dump.
+    for name in os.listdir(d['exefs']):
+        src = os.path.join(d['exefs'], name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(final, name))
+
+    cx.state['scarlet_main_build_id'] = profile.MAIN_BUILD_ID
+    say('  Pokémon Scarlet %s -> %s' % (version, os.path.relpath(final, cx.build)))
+    for line in out.splitlines():
+        if line.startswith('  ') or line.startswith('OK:'):
+            say(line)
 
 def step_modules(cx):
-    ro = os.path.join(cx.work, 'ro_study')
-    env = cx.env(SSBU_ARC=os.path.join(cx.state['dump']['romfs'], 'data.arc'))
-    if not os.path.isdir(os.path.join(ro, 'nro')) or not any(f.endswith('.nro') for f in os.listdir(os.path.join(ro, 'nro'))):
-        cx.run('modules', [sys.executable, 'arc_extract.py', 'nro', 'nro'], cwd=ro, env=env)
-    n = len([f for f in os.listdir(os.path.join(ro, 'nro')) if f.endswith('.nro')])
-    cx.run('modules', [sys.executable, 'lift_all.py', 'map'], cwd=ro, env=env)
-    cx.run('modules', [sys.executable, 'build_nro.py'], cwd=cx.work)          # writes nro_registry.c from ro_study\nro_map.json
-    say('  %d script modules extracted from data.arc, nro_map.json and nro_registry.c written' % n)
+    """Scarlet 1.0.0 currently has no SSBU-style data.arc fighter NRO stage.
 
+    Keep an empty registry so the shared runtime can link while the static
+    main/sdk/subsdk0 path is generalized. Dynamic nn::ro modules, if Scarlet
+    proves to use any, will get their own measured registry later.
+    """
+    path = os.path.join(cx.work, 'nro_registry.c')
+    text = ('/* generated by scripts/setup.py for Scarlet bootstrap */\n'
+            '#include "game_data.h"\n'
+            'const NroInfo nro_registry[] = {{0}};\n'
+            'const int nro_registry_count = 0;\n')
+    with open(path, 'w', newline='\n') as f:
+        f.write(text)
+    say('  Scarlet bootstrap: no SSBU data.arc/NRO extraction; empty nro_registry.c written')
 
 STUB_LIST = '/* no audit data: the strict-mode lists are empty (the port runs the same; SSBU_STRICT then reports nothing) */\nstatic const char *const %s[] = {\n    "",\n};\n'
 
@@ -1064,12 +1064,10 @@ def step_compile(cx):
 
 
 def step_nro(cx):
-    mods = [m for m in (cx.a.modules or 'all').split(',') if m]
-    argv = [sys.executable, 'build_opt.py', 'nro', str(cx.jobs)] + ([] if mods == ['all'] else mods)
-    cx.run('nro', argv, env=build_env(cx))
+    """No SSBU fighter/script NRO DLLs in the Scarlet bootstrap target."""
     d = os.path.join(cx.work, 'nro_bin_eh_o2')
-    say('  %d module libraries in nro_bin_eh_o2 (%.0f MB)' % (len([f for f in os.listdir(d) if f.endswith(lib_ext(cx))]), disk_mb(d)))
-
+    os.makedirs(d, exist_ok=True)
+    say('  Scarlet bootstrap: 0 ahead-of-time NRO module libraries')
 
 def step_link(cx):
     if cx.linux:
@@ -1246,18 +1244,18 @@ def how_to_run(cx):
     if cx.linux:
         say('  deps/venv/bin/python scripts/run.py --linux        (saves in ~/.local/share/ssbu-recomp/userdata)')
         say('  scripts/linux/install_desktop.sh                   adds a launcher to your application menu')
-        say('or by hand:   cd %s   and run   ./%s ../binaries/%s/main.elf 0' % (cx.work, LINUX_EXE, cx.state.get('game_version', '13.0.4')))
+        say('or by hand:   cd %s   and run   ./%s ../binaries/%s/main.elf 0' % (cx.work, LINUX_EXE, cx.state.get('game_version', profile.BASE_VERSION)))
         say('with the environment variables SSBU_ROMFS=%s  SSBU_USERDATA=<saves>' % d.get('romfs', '<romfs>'))
         return
     if cx.mac:
         say('  ./play_mac.sh                                       (saves in ~/Library/Application Support/ssbu-recomp/userdata;')
         say('                                                       the game log goes to build-macos/logs)')
         say('or:   deps/venv/bin/python scripts/run.py --mac --play')
-        say('or by hand:   cd %s   and run   ./%s ../binaries/%s/main.elf 0' % (cx.work, LINUX_EXE, cx.state.get('game_version', '13.0.4')))
+        say('or by hand:   cd %s   and run   ./%s ../binaries/%s/main.elf 0' % (cx.work, LINUX_EXE, cx.state.get('game_version', profile.BASE_VERSION)))
         say('with the environment variables SSBU_ROMFS=%s  SSBU_USERDATA=<saves>' % d.get('romfs', '<romfs>'))
         return
     say('  python scripts/run.py --userdata <a folder for your saves> [--seconds 0]')
-    say('or by hand:   cd build\\work   and run   %s ..\\binaries\\%s\\main.elf 0' % (EXE, cx.state.get('game_version', '13.0.4')))
+    say('or by hand:   cd build\\work   and run   %s ..\\binaries\\%s\\main.elf 0' % (EXE, cx.state.get('game_version', profile.BASE_VERSION)))
     say('with the environment variables SSBU_ROMFS=%s  SSBU_USERDATA=<saves>  (options: BUILDING.md)' % d.get('romfs', '<romfs>'))
 
 
