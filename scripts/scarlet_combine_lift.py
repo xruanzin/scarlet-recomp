@@ -82,7 +82,7 @@ def main(argv=None):
     all_funcs = []
     all_resume = []
     all_decls = set()
-    keep = {"funcs.h", "table.c", "scarlet_combined_manifest.json"}
+    keep = {"funcs.h", "table.c", "imports.c", "scarlet_combined_manifest.json"}
     module_stats = {}
     copied = changed = 0
 
@@ -158,6 +158,14 @@ def main(argv=None):
     ]
     write_if_changed(os.path.join(out, "table.c"), "\n".join(table))
 
+    # hostrt.c's import/HLE accounting remains keyed to main's original dynsym
+    # indices. sdk/subsdk0 relocations are handled by the Scarlet module loader,
+    # so do not concatenate their dynsym arrays and silently change indices.
+    main_imports = os.path.join(lift, "main", "imports.c")
+    if not os.path.isfile(main_imports):
+        raise FileNotFoundError(main_imports)
+    copy_if_changed(main_imports, os.path.join(out, "imports.c"))
+
     unresolved = {}
     weak_unresolved = {}
     strong_unresolved = {}
@@ -186,6 +194,7 @@ def main(argv=None):
         "weak_unresolved_imports": weak_unresolved,
         "strong_unresolved_imports": strong_unresolved,
         "load_order_resolutions": ordered,
+        "dyn_syms": "main-only; sdk/subsdk0 relocations are loader-owned",
         "runtime_ready": False,
         "runtime_blocker": "multi-module ELF relocation loader not integrated yet",
     }
