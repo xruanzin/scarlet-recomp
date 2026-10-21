@@ -933,17 +933,47 @@ class Env:
         return 'f_%x(c);' % target
 
     def compute_starts(self):
-        """Function entries: every BL target plus every code address stored in data (relative relocs)."""
+        """Discover function entries while keeping data/padding out of the lift.
+
+        BL targets and exported FUNC symbols are authoritative. Relative
+        relocations and ADR/ADRP materialised addresses are only *possible*
+        callbacks: Scarlet has many relocations to zero/data inside the .text
+        address range, and treating those as functions creates enormous fake
+        UDF/padding bodies. Keep heuristic candidates only when their first word
+        is not zero or the known invalid padding sentinel. EH starts are added
+        separately by recomp_eh.py and therefore are never lost here.
+        """
         starts = set()
         text = IMG[FILE_OFF:FILE_OFF + TEXT_SIZE]
+
+        def plausible_heuristic_target(target):
+            if not (0 <= target < TEXT_SIZE and target % 4 == 0):
+                return False
+            w = struct.unpack_from('<I', text, target)[0]
+            return w not in (0x00000000, 0xe7ffdefe)
+
+        direct = set()
         for i, (w,) in enumerate(struct.iter_unpack('<I', text)):
             if (w & 0xfc000000) == 0x94000000:
-                starts.add(BASE + i * 4 + sext(w & 0x3ffffff, 26) * 4)
+                target = i * 4 + sext(w & 0x3ffffff, 26) * 4
+                if 0 <= target < TEXT_SIZE and target % 4 == 0:
+                    direct.add(BASE + target)
+        starts |= direct
+
+        reloc_candidates = set()
+        reloc_rejected = 0
         for i in range(RELASZ // 24):
             off, info, addend = struct.unpack_from('<QQq', IMG, FILE_OFF + RELA + i * 24)
             if info == 0x403 and 0 <= addend < TEXT_SIZE and addend % 4 == 0:
-                starts.add(BASE + addend)
+                if plausible_heuristic_target(addend):
+                    reloc_candidates.add(BASE + addend)
+                else:
+                    reloc_rejected += 1
+        starts |= reloc_candidates
+
         # code addresses materialised in registers (callbacks, thread entry points): ADRP+ADD pairs and ADR
+        materialised = set()
+        materialised_rejected = 0
         page = {}
         for i, (w,) in enumerate(struct.iter_unpack('<I', text)):
             if (w & 0x9f000000) == 0x90000000:                       # adrp
@@ -953,18 +983,31 @@ class Env:
                 hit = page.get((w >> 5) & 31)
                 if hit and i - hit[0] <= 8:
                     target = hit[1] + ((w >> 10) & 0xfff)
-                    if 0 <= target < TEXT_SIZE and target % 4 == 0:
-                        starts.add(BASE + target)
+                    if plausible_heuristic_target(target):
+                        materialised.add(BASE + target)
+                    elif 0 <= target < TEXT_SIZE and target % 4 == 0:
+                        materialised_rejected += 1
             elif (w & 0x9f000000) == 0x10000000:                     # adr
                 imm = sext((((w >> 5) & 0x7ffff) << 2) | ((w >> 29) & 3), 21)
                 target = i * 4 + imm
-                if 0 <= target < TEXT_SIZE and target % 4 == 0:
-                    starts.add(BASE + target)
+                if plausible_heuristic_target(target):
+                    materialised.add(BASE + target)
+                elif 0 <= target < TEXT_SIZE and target % 4 == 0:
+                    materialised_rejected += 1
+        starts |= materialised
+
+        exports = set()
         # functions other modules call by name: exported FUNC symbols
         for i in range((STRTAB - SYMTAB) // 24):
             _, info, _, shndx, value, _ = struct.unpack_from('<IBBHQQ', IMG, FILE_OFF + SYMTAB + i * 24)
             if shndx and (info & 0xf) == 2 and value % 4 == 0:
-                starts.add(BASE + value)
+                exports.add(BASE + value)
+        starts |= exports
+
+        if MODULE != 'main' or os.environ.get('RECOMP_STARTS_VERBOSE'):
+            print('function-start sources %s: BL=%d reloc=%d (rejected padding=%d) materialised=%d (rejected padding=%d) exports=%d'
+                  % (MODULE, len(direct), len(reloc_candidates), reloc_rejected,
+                     len(materialised), materialised_rejected, len(exports)))
         self.starts = sorted(a for a in starts if BASE <= a < BASE + TEXT_SIZE)
         return self.starts
 
