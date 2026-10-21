@@ -89,6 +89,10 @@ def run_module(name, bin_dir, out_root, jobs):
             return {"module": name, "ok": False, "code": 98}
         print("verified late targets in %s/table.c: %s" %
               (name, ", ".join(hex(x) for x in late)), flush=True)
+    rev = getattr(profile, "LIFT_ABI_REV", "")
+    if rev:
+        with open(os.path.join(out, ".scarlet_lift_rev"), "w", encoding="utf-8") as mf:
+            mf.write(rev + "\n")
     m = re.search(r"functions:\s+(\d+).*instructions:\s+(\d+)\s+not translated:\s+(\d+)", output)
     return {
         "module": name,
