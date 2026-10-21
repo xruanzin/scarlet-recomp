@@ -454,6 +454,13 @@ def step_deps(cx):
             return False
         return 'version 9.' in v or 'version 8.' in v
     llvm = find_first([a.llvm, os.environ.get('LLVM_ROOT'), os.path.join(deps, 'llvm'), r'C:\llvm-9.0.0', r'C:\Program Files\LLVM'], is_9)
+    if not llvm and not (a.llvm or os.environ.get('LLVM_ROOT')):
+        try:
+            import install as installer
+            say('  LLVM/clang 9 not found; downloading the project-pinned portable LLVM 9...')
+            llvm = installer.fetch('llvm')
+        except Exception as e:
+            raise Fail('LLVM/clang 9.0.0 not found and automatic verified download failed: %s' % e)
     if not llvm:
         raise Fail('LLVM/clang 9.0.0 not found (--llvm <folder with bin\\clang.exe>)')
     clang = os.path.join(llvm, 'bin', 'clang.exe')
@@ -490,16 +497,22 @@ def step_deps(cx):
                    'or use a prebuilt runtime package (--runtime, scripts/install.py)')
     say('  clang + MSVC linker + Windows SDK: ok')
 
-    for key, opt, envv, sub, probe_rel in (
-            ('sdl3', a.sdl3, 'SDL3_ROOT', 'SDL3', os.path.join('include', 'SDL3', 'SDL.h')),
-            ('vulkan', a.vulkan_headers, 'VULKAN_HEADERS', 'Vulkan-Headers', os.path.join('include', 'vulkan', 'vulkan.h')),
-            ('glslang', a.glslang, 'GLSLANG_ROOT', 'glslang', os.path.join('include', 'glslang', 'Include', 'glslang_c_interface.h')),
-            ('suyu', a.suyu, 'SUYU_ROOT', 'suyu', os.path.join('src', 'core', 'hle', 'service', 'mii', 'types', 'raw_data.cpp'))):
+    for key, opt, envv, sub, probe_rel, fetch_name in (
+            ('sdl3', a.sdl3, 'SDL3_ROOT', 'SDL3', os.path.join('include', 'SDL3', 'SDL.h'), 'sdl3'),
+            ('vulkan', a.vulkan_headers, 'VULKAN_HEADERS', 'Vulkan-Headers', os.path.join('include', 'vulkan', 'vulkan.h'), 'vulkan-headers'),
+            ('glslang', a.glslang, 'GLSLANG_ROOT', 'glslang', os.path.join('include', 'glslang', 'Include', 'glslang_c_interface.h'), 'glslang')):
         found = find_first([opt, os.environ.get(envv), os.path.join(deps, sub)], lambda d, p=probe_rel: os.path.exists(os.path.join(d, p)))
+        if not found and not (opt or os.environ.get(envv)):
+            try:
+                import install as installer
+                say('  %s not found; downloading verified project dependency...' % sub)
+                found = installer.fetch(fetch_name)
+            except Exception as e:
+                raise Fail('%s automatic verified download failed: %s' % (sub, e))
         if not found:
-            raise Fail('%s not found (--%s <folder containing %s>)' % (sub, {'sdl3': 'sdl3', 'vulkan': 'vulkan-headers', 'glslang': 'glslang', 'suyu': 'suyu'}[key], probe_rel))
+            raise Fail('%s not found (--%s <folder containing %s>)' % (sub, {'sdl3': 'sdl3', 'vulkan': 'vulkan-headers', 'glslang': 'glslang'}[key], probe_rel))
         cx.tools[key] = found
-        say('  %-8s %s' % (sub, found))
+        say('  %-14s %s' % (sub, found))
     if not os.path.exists(os.path.join(cx.tools['sdl3'], 'lib', 'x64', 'SDL3.lib')):
         raise Fail('SDL3 folder lacks lib\\x64\\SDL3.lib (use the "VC" development package)')
     if not os.path.exists(os.path.join(cx.tools['glslang'], 'lib', 'glslang.lib')):
