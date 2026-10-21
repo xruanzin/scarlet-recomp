@@ -32,7 +32,7 @@ enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESS
        SERVICE_APPLET, SERVICE_PROXY, SERVICE_COMMON, SERVICE_SELF, SERVICE_WINDOW,
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
        SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL,
-       SERVICE_FSP, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
+       SERVICE_FSP, SERVICE_FSP_STORAGE, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
        SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 static const unsigned char scarlet_clock_uuid[16] =
@@ -141,9 +141,33 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
         uint32_t hd = msg[off++];
         off += (hd & 1 ? 2 : 0) + ((hd >> 1) & 15) + ((hd >> 5) & 15);
     }
-    off += ((msg[0] >> 16) & 15) * 2;
-    off += (((msg[0] >> 20) & 15) + ((msg[0] >> 24) & 15) + (msg[0] >> 28)) * 3;
+    int nx = (msg[0] >> 16) & 15;
+    int na = (msg[0] >> 20) & 15;
+    int nb = (msg[0] >> 24) & 15;
+    int nw = (msg[0] >> 28) & 15;
+    uint64_t out_buf_addr = 0, out_buf_size = 0;
+    off += (size_t)nx * 2;
+    off += (size_t)na * 3;
+    if (nb) {
+        if (off + 3 > size / 4) return R_INVALID_SIZE;
+        uint32_t *d = msg + off;
+        out_buf_size = d[0] | ((uint64_t)((d[2] >> 24) & 15) << 32);
+        out_buf_addr = d[1] | ((uint64_t)(d[2] >> 28) << 32) |
+                       ((uint64_t)((d[2] >> 2) & 7) << 36);
+    }
+    off += (size_t)nb * 3;
+    off += (size_t)nw * 3;
     size_t raw_end = off + words, aligned = (off + 3) & ~(size_t)3;
+    {
+        uint32_t cflags = (msg[1] >> 10) & 15;
+        if (!out_buf_addr && cflags >= 2) {
+            uint32_t *cd = msg + raw_end;
+            if ((size_t)(cd - msg) + 2 <= size / 4) {
+                out_buf_addr = cd[0] | ((uint64_t)(cd[1] & 0xffff) << 32);
+                out_buf_size = cd[1] >> 16;
+            }
+        }
+    }
     int tipc = type >= 16;
     if (raw_end > size / 4 || (!tipc && aligned + 4 > raw_end)) return R_INVALID_SIZE;
     Domain *domain = domains[h - HANDLE_BASE];
@@ -355,16 +379,35 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             data_size = 0x10;
             trace_printf("Scarlet pctl cmd %u -> unrestricted/16-byte zero payload\n", cmd);
         } else if (service == SERVICE_FSP) {
-            /* Proven Scarlet bootstrap contract from scarlet_pc. The early
-             * startup path only needs SetCurrentProcess plus CMIF control
-             * messages before rtld_init; keep the other harmless bootstrap
-             * controls ready so we do not stop one command later. */
             if (cmd == 1 || cmd == 22 || cmd == 1003 || cmd == 1004 || cmd == 1006) {
-                /* success, no payload */
+                /* SetCurrentProcess / harmless bootstrap controls */
+            } else if (cmd == 200) {
+                extern int scarlet_romfs_init(void);
+                if (!scarlet_romfs_init()) result = 0x2ee202;
+                else {
+                    moved = new_session(SERVICE_FSP_STORAGE);
+                    if (!moved) result = 0xd201;
+                }
             } else if (cmd == 1005) {
                 value = 0; data_size = 4; /* GetGlobalAccessLogMode */
             } else if (cmd == 1011) {
                 memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
+            } else {
+                goto unsupported;
+            }
+        } else if (service == SERVICE_FSP_STORAGE) {
+            if (cmd == 0) { /* IStorage::Read(offset,size) -> B/C buffer */
+                if (input_size < 16 || !out_buf_addr) return R_INVALID_SIZE;
+                uint64_t roff = 0, rsize = 0;
+                memcpy(&roff, data, 8);
+                memcpy(&rsize, (unsigned char *)data + 8, 8);
+                if (rsize > out_buf_size) rsize = out_buf_size;
+                extern int scarlet_romfs_read(uint64_t, void *, uint64_t);
+                if (!scarlet_romfs_read(roff, (void *)(uintptr_t)out_buf_addr, rsize))
+                    result = 0x2ee202;
+            } else if (cmd == 4) { /* GetSize */
+                extern uint64_t scarlet_romfs_size(void);
+                value = scarlet_romfs_size(); data_size = 8;
             } else {
                 goto unsupported;
             }
