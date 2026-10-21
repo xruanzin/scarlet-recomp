@@ -39,7 +39,7 @@ if _module_map and os.path.isfile(_module_map):
         _map = json.load(_f)
     for _name, _target in _map.get('resolutions', {}).get(MODULE, {}).items():
         try:
-            if _target.get('in_text'):
+            if _target.get('in_text') and not _target.get('hle_override'):
                 DIRECT_IMPORTS[_name] = int(_target['address'])
         except (AttributeError, KeyError, TypeError, ValueError):
             pass
