@@ -15,8 +15,8 @@
 #endif
 
 #ifdef SCARLET_RECOMP
-#define NNINIT_STARTUP main_export("nninitStartup")
-#define NN_MAIN main_export("nnMain")
+#define NNINIT_STARTUP scarlet_find_static_symbol("nninitStartup")
+#define NN_MAIN scarlet_find_static_symbol("nnMain")
 #else
 #define NNINIT_STARTUP GA(GUEST_BASE + 0x2c55e0ULL)
 #define NN_MAIN GA(GUEST_BASE + 0x2c5620ULL)
