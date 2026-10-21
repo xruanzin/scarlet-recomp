@@ -309,6 +309,8 @@ class Fn:
             return 'c->tpidr = %s;' % X(bits(w, 4, 0))
         if (w & 0xffffffe0) == 0xd53b00e0:
             return SET(bits(w, 4, 0), 1, '0x10ULL')     # dczid_el0: DC ZVA prohibited
+        if (w & 0xffffffe0) == 0xd53b0020:
+            return SET(bits(w, 4, 0), 1, '0x8444c004ULL') # ctr_el0: Cortex-A57/Tegra X1 cache geometry
         if (w & 0xffffffe0) in (0xd53b4400, 0xd53b4420):
             return SET(bits(w, 4, 0), 1, '0ULL')        # fpcr / fpsr read
         if (w & 0xffffffe0) in (0xd51b4400, 0xd51b4420):
