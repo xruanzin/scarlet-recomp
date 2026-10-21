@@ -321,8 +321,10 @@ class Fn:
             return 'guest_svc(c, 0x%x);' % bits(w, 20, 5)
         if (w & 0xffe0001f) == 0xd4200000:
             return 'guest_trap("brk", 0x%xULL);' % pc
-        if (w & 0xffffffe0) in (0xd53bd040, 0xd53bd060):
-            return SET(bits(w, 4, 0), 1, 'c->tpidr')
+        if (w & 0xffffffe0) == 0xd53bd040:
+            return SET(bits(w, 4, 0), 1, 'c->tpidr')              # TPIDR_EL0: writable user TLS
+        if (w & 0xffffffe0) == 0xd53bd060:
+            return SET(bits(w, 4, 0), 1, 'guest_tpidrro(c)')      # TPIDRRO_EL0: read-only TLR / IPC buffer
         if (w & 0xffffffe0) == 0xd51bd040:
             return 'c->tpidr = %s;' % X(bits(w, 4, 0))
         if (w & 0xffffffe0) == 0xd53b00e0:
