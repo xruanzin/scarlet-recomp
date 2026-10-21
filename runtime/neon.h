@@ -126,7 +126,7 @@ static inline void v_f3e(V128 *d, const V128 *pn, const V128 *pm, int idx, int o
 }
 
 enum { F1_ABS, F1_NEG, F1_SQRT, F1_RSQRTE, F1_RECPE, F1_SCVTF, F1_UCVTF, F1_CVTZS, F1_CVTZU,
-       F1_CMEQ0, F1_CMGT0, F1_CMGE0, F1_CMLT0, F1_CMLE0 };
+       F1_CMEQ0, F1_CMGT0, F1_CMGE0, F1_CMLT0, F1_CMLE0, F1_FRINTM, F1_FRINTZ };
 
 static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
     V128 a = *pn, r;
@@ -149,6 +149,8 @@ static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
             case F1_CMGE0: r.d[i] = x >= 0 ? ~0ull : 0; break;
             case F1_CMLT0: r.d[i] = x < 0 ? ~0ull : 0; break;
             case F1_CMLE0: r.d[i] = x <= 0 ? ~0ull : 0; break;
+            case F1_FRINTM: r.df[i] = floor(x); break;
+            case F1_FRINTZ: r.df[i] = trunc(x); break;
             }
         } else {
             float x = a.f[i];
@@ -167,6 +169,8 @@ static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
             case F1_CMGE0: r.w[i] = x >= 0 ? ~0u : 0; break;
             case F1_CMLT0: r.w[i] = x < 0 ? ~0u : 0; break;
             case F1_CMLE0: r.w[i] = x <= 0 ? ~0u : 0; break;
+            case F1_FRINTM: r.f[i] = floorf(x); break;
+            case F1_FRINTZ: r.f[i] = truncf(x); break;
             }
         }
     }
