@@ -219,6 +219,52 @@ void trace_printf(const char *fmt, ...) {
     va_end(ap);
 }
 
+/* ---------------------------------------------------------------- TPIDRRO_EL0
+ * The lifted Ctx historically had one tpidr field and therefore conflated
+ * TPIDR_EL0 (writable TLS) with TPIDRRO_EL0 (read-only TLR / IPC buffer).
+ * Keep Ctx ABI stable and store the second register in a small host-side map.
+ */
+typedef struct { Ctx *ctx; uint64_t value; } TpidrroSlot;
+static TpidrroSlot g_tpidrro_slots[512];
+static SRWLOCK g_tpidrro_lock = SRWLOCK_INIT;
+
+uint64_t guest_tpidrro(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    uint64_t v = 0;
+    AcquireSRWLockShared(&g_tpidrro_lock);
+    for (unsigned i = 0; i < sizeof(g_tpidrro_slots)/sizeof(g_tpidrro_slots[0]); ++i)
+        if (g_tpidrro_slots[i].ctx == c) { v = g_tpidrro_slots[i].value; break; }
+    ReleaseSRWLockShared(&g_tpidrro_lock);
+    return v ? v : c->tpidr;
+#else
+    return c->tpidr;
+#endif
+}
+void scarlet_set_tpidrro(Ctx *c, uint64_t v) {
+#ifdef SCARLET_RECOMP
+    AcquireSRWLockExclusive(&g_tpidrro_lock);
+    unsigned free_i = (unsigned)-1;
+    for (unsigned i = 0; i < sizeof(g_tpidrro_slots)/sizeof(g_tpidrro_slots[0]); ++i) {
+        if (g_tpidrro_slots[i].ctx == c) { g_tpidrro_slots[i].value = v; ReleaseSRWLockExclusive(&g_tpidrro_lock); return; }
+        if (free_i == (unsigned)-1 && !g_tpidrro_slots[i].ctx) free_i = i;
+    }
+    if (free_i != (unsigned)-1) { g_tpidrro_slots[free_i].ctx = c; g_tpidrro_slots[free_i].value = v; }
+    ReleaseSRWLockExclusive(&g_tpidrro_lock);
+#else
+    (void)c; (void)v;
+#endif
+}
+void scarlet_clear_tpidrro(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    AcquireSRWLockExclusive(&g_tpidrro_lock);
+    for (unsigned i = 0; i < sizeof(g_tpidrro_slots)/sizeof(g_tpidrro_slots[0]); ++i)
+        if (g_tpidrro_slots[i].ctx == c) { g_tpidrro_slots[i].ctx = NULL; g_tpidrro_slots[i].value = 0; break; }
+    ReleaseSRWLockExclusive(&g_tpidrro_lock);
+#else
+    (void)c;
+#endif
+}
+
 /* ---------------------------------------------------------------- lookup */
 /* P3: guest address -> lifted function through a hash table built in runtime_init (open addressing, load below 1/2);
  * before that, and as the reference, the binary search over fn_table (sorted by address). Same answer either way. */
