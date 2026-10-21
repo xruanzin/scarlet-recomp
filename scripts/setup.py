@@ -1008,6 +1008,23 @@ def step_tables(cx):
     say('  Scarlet imports_all.txt, sdkdata.c and compatibility test headers written')
 
 
+def scarlet_late_targets(module, build_dir):
+    vals = set(getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ()))
+    path = os.path.join(build_dir, 'scarlet_late_targets.txt')
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == module:
+                    try:
+                        vals.add(int(parts[1], 0))
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    return tuple(sorted(vals))
+
+
 def step_lift(cx):
     # Scarlet has three static NSO modules. Lift each one at its real guest
     # address, resolve sibling-module PLT imports through the generated symbol
@@ -1025,7 +1042,7 @@ def step_lift(cx):
             raise Fail('--reuse-probe-lift requested but build\\lift is missing: ' + ', '.join(missing))
         stale = []
         for module in profile.STATIC_MODULES:
-            late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+            late = scarlet_late_targets(module, cx.build)
             if not late:
                 continue
             table_path = os.path.join(probe_root, module, 'table.c')
@@ -1041,7 +1058,7 @@ def step_lift(cx):
         # Refuse to combine a stale probe lift when the profile names a
         # boot-discovered indirect target that is absent from its module table.
         for module in profile.STATIC_MODULES:
-            late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+            late = scarlet_late_targets(module, cx.build)
             if not late:
                 continue
             tp = os.path.join(probe_root, module, 'table.c')
@@ -1079,7 +1096,7 @@ def step_lift(cx):
         env = cx.env(RECOMP_MODULE=module,
                      RECOMP_BASE=hex(profile.MODULE_BASES[module]),
                      RECOMP_MODULE_MAP=module_map)
-        late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+        late = scarlet_late_targets(module, cx.build)
         if late:
             env['RECOMP_EXTRA_STARTS'] = ','.join(hex(x) for x in late)
         cx.run('lift', [sys.executable, 'recomp_eh.py', outdir, str(cx.lift_jobs)],
