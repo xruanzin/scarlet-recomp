@@ -68,7 +68,11 @@ ScarletStaticModule g_scarlet_static_modules[SCARLET_STATIC_MODULE_COUNT] = {
 };
 
 static int read_at(FILE *f, uint64_t off, void *p, size_t n) {
+#ifdef _WIN32
     if (_fseeki64(f, (__int64)off, SEEK_SET)) return 0;
+#else
+    if (fseeko(f, (off_t)off, SEEK_SET)) return 0;
+#endif
     return fread(p, 1, n, f) == n;
 }
 
@@ -330,12 +334,17 @@ static int module_paths(const char *main_elf, char out[3][1024]) {
     char dir[1024];
     memcpy(dir, main_elf, n + 1);
     char *a = strrchr(dir, '/'), *b = strrchr(dir, '\\');
-    char *slash = a > b ? a : b;
+    char *slash = a && (!b || a > b) ? a : b;
     if (!slash) strcpy(dir, ".");
     else *slash = 0;
-    snprintf(out[0], 1024, "%s%cmain.elf", dir, '\\');
-    snprintf(out[1], 1024, "%s%csdk.elf", dir, '\\');
-    snprintf(out[2], 1024, "%s%csubsdk0.elf", dir, '\\');
+#ifdef _WIN32
+    const char sep = '\\';
+#else
+    const char sep = '/';
+#endif
+    snprintf(out[0], 1024, "%s%cmain.elf", dir, sep);
+    snprintf(out[1], 1024, "%s%csdk.elf", dir, sep);
+    snprintf(out[2], 1024, "%s%csubsdk0.elf", dir, sep);
     return 1;
 }
 
