@@ -1186,6 +1186,17 @@ def lift_function(env, entry):
             if shndx:                                    # symbol defined inside this module
                 env.wanted.setdefault(BASE + value, None)
                 return 'void f_%x(Ctx *c) { f_%x(c); }' % (entry, BASE + value), 0, []
+            if MODULE != 'main':
+                info = IMG[FILE_OFF + SYMTAB + sym * 24 + 4]
+                bind = info >> 4
+                # The combined DLL intentionally keeps main's dynsym numbering.
+                # Scarlet's measured sdk/subsdk0 external imports are all weak
+                # and their GOT slots are relocated to NULL. A direct call to
+                # such a PLT would therefore fault on console too; never pass a
+                # module-local symbol index to main's host_import table.
+                why = 'unresolved weak import' if bind == 2 else 'unresolved non-main import'
+                return ('void f_%x(Ctx *c) { guest_trap("%s", 0x%xULL); }'
+                        % (entry, why, entry)), 0, []
             return 'void f_%x(Ctx *c) { host_import(c, %d); }' % (entry, sym), 0, []
     end = env.extent(entry)
     fn = Fn(entry, end, env)
