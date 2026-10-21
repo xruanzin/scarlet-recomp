@@ -84,6 +84,7 @@ CASES = [
     ("sqxtn-h",   0x5e614a11),
     ("sqxtn-s",   0x5ea14a32),
     ("smlal-elem-long", 0x0f862060),
+    ("unallocated-a57", 0x009ed9a4),
 ]
 
 env = recomp.Env()
