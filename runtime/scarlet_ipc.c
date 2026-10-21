@@ -35,6 +35,24 @@ static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 static volatile uint32_t g_scarlet_terminate_result;
 uint32_t scarlet_last_terminate_result(void) { return g_scarlet_terminate_result; }
 
+typedef struct { uint32_t service, cmd, type, result; } ScarletIpcRecent;
+static ScarletIpcRecent g_ipc_recent[32];
+static volatile LONG g_ipc_recent_seq;
+static void remember_ipc(uint32_t service, uint32_t cmd, uint32_t type, uint32_t result) {
+    LONG n = InterlockedIncrement(&g_ipc_recent_seq);
+    g_ipc_recent[(unsigned)n & 31] = (ScarletIpcRecent){service, cmd, type, result};
+}
+static void dump_recent_ipc(void) {
+    LONG n = g_ipc_recent_seq;
+    fprintf(stderr, "[Scarlet diagnostic] recent IPCs (oldest to newest):\n");
+    LONG first = n > 31 ? n - 31 : 1;
+    for (LONG i = first; i <= n; ++i) {
+        ScarletIpcRecent e = g_ipc_recent[(unsigned)i & 31];
+        fprintf(stderr, "  service=%u cmd=%u type=%u result=0x%08x\n",
+                e.service, e.cmd, e.type, e.result);
+    }
+}
+
 static uint32_t new_session(unsigned char service) {
     uint32_t h = 0;
     AcquireSRWLockExclusive(&sessions_lock);
@@ -201,6 +219,11 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             g_scarlet_terminate_result = terminate_result;
             trace_printf("Scarlet SetTerminateResult(%08x)\n", terminate_result);
             printf("Scarlet SetTerminateResult = 0x%08x\n", terminate_result);
+            if (terminate_result) {
+                extern void scarlet_dump_guest_stack_now(Ctx *, const char *);
+                dump_recent_ipc();
+                scarlet_dump_guest_stack_now(c, "SetTerminateResult(nonzero)");
+            }
         } else if (service == SERVICE_APPLICATION && cmd == 23) {
             /* GetDisplayVersion returns exactly 0x10 bytes. */
             memcpy(out_data, "1.0.0", 5);
@@ -324,6 +347,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             trace_printf("Scarlet ILogger destination=%x (host trace)\n", data[0]);
         } else goto unsupported;
     } else goto unsupported;
+    remember_ipc(service, cmd, type, result);
     const size_t data_words = (data_size + 3) / 4;
     const int has_handles = moved || copied;
 
