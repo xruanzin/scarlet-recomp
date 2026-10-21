@@ -817,6 +817,86 @@ static uint64_t scarlet_rng64(void) {
     return g_scarlet_rng * 0x2545f4914f6cdd1dULL;
 }
 
+/* Horizon mutex words are a thread handle plus bit 30 when kernel waiters
+ * exist. Windows WaitOnAddress gives us the same sleep/wake primitive without
+ * spinning a host CPU while the full Scarlet kernel is being brought over. */
+#define SCARLET_WAITERS_BIT 0x40000000u
+#define SCARLET_R_TIMEOUT   0xEA01u
+
+static uint32_t scarlet_mutex_load(uint64_t addr) {
+    return (uint32_t)InterlockedCompareExchange((volatile LONG *)(uintptr_t)addr, 0, 0);
+}
+static void scarlet_mutex_unlock(uint64_t addr) {
+    volatile LONG *p = (volatile LONG *)(uintptr_t)addr;
+    uint32_t old = (uint32_t)InterlockedExchange(p, 0);
+    if (old & SCARLET_WAITERS_BIT) WakeByAddressSingle((PVOID)p);
+    else WakeByAddressSingle((PVOID)p); /* harmless, and covers conservative waiter ownership */
+}
+static void scarlet_mutex_acquire_after_wait(uint64_t addr, uint32_t tag) {
+    volatile LONG *p = (volatile LONG *)(uintptr_t)addr;
+    for (;;) {
+        uint32_t v = scarlet_mutex_load(addr);
+        if (v == 0) {
+            /* Preserve the waiter bit conservatively: if another waiter exists,
+             * the eventual owner will enter SVC ArbitrateUnlock and wake it. */
+            LONG want = (LONG)(tag | SCARLET_WAITERS_BIT);
+            if ((uint32_t)InterlockedCompareExchange(p, want, 0) == 0) return;
+            continue;
+        }
+        uint32_t observed = v;
+        WaitOnAddress((volatile VOID *)p, &observed, sizeof observed, INFINITE);
+    }
+}
+static uint32_t scarlet_arbitrate_lock(uint32_t owner, uint64_t addr, uint32_t tag) {
+    volatile LONG *p = (volatile LONG *)(uintptr_t)addr;
+    uint32_t expected_owner = owner | SCARLET_WAITERS_BIT;
+    uint32_t v = scarlet_mutex_load(addr);
+    /* Horizon returns immediately when userspace changed the word before the
+     * syscall entered. This race is normal. */
+    if (v != expected_owner) return 0;
+    for (;;) {
+        v = scarlet_mutex_load(addr);
+        if (v == 0) {
+            LONG want = (LONG)(tag | SCARLET_WAITERS_BIT);
+            if ((uint32_t)InterlockedCompareExchange(p, want, 0) == 0) return 0;
+            continue;
+        }
+        uint32_t observed = v;
+        WaitOnAddress((volatile VOID *)p, &observed, sizeof observed, INFINITE);
+    }
+}
+static uint32_t scarlet_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64_t timeout_ns) {
+    volatile LONG *kp = (volatile LONG *)(uintptr_t)key;
+    InterlockedExchange(kp, 1);       /* publish waiter before releasing mutex */
+    scarlet_mutex_unlock(mutex);
+    if (timeout_ns == 0) return SCARLET_R_TIMEOUT;
+
+    DWORD ms = INFINITE;
+    if (timeout_ns > 0) {
+        uint64_t m = ((uint64_t)timeout_ns + 999999ULL) / 1000000ULL;
+        ms = m >= 0xfffffffeULL ? 0xfffffffeUL : (DWORD)m;
+    }
+    uint32_t one = 1;
+    BOOL woke = WaitOnAddress((volatile VOID *)kp, &one, sizeof one, ms);
+    if (!woke && GetLastError() == ERROR_TIMEOUT) return SCARLET_R_TIMEOUT;
+
+    /* On a successful signal Horizon hands the waiter its mutex before return.
+     * A timed-out caller reacquires it in the SDK, so only do this on success. */
+    scarlet_mutex_acquire_after_wait(mutex, tag);
+    return 0;
+}
+static void scarlet_signal_process_wide_key(uint64_t key, int32_t count) {
+    volatile LONG *kp = (volatile LONG *)(uintptr_t)key;
+    if (count <= 0) {
+        InterlockedExchange(kp, 0);
+        WakeByAddressAll((PVOID)kp);
+    } else {
+        /* Keep the flag set: there may be more waiters. Extra later signals are
+         * harmless; clearing it here could make userspace skip a needed signal. */
+        for (int32_t i = 0; i < count; i++) WakeByAddressSingle((PVOID)kp);
+    }
+}
+
 static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     uint64_t *x = c->x;
     switch (n) {
@@ -930,6 +1010,43 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x10: /* GetCurrentProcessorNumber */
         x[0] = (uint64_t)(uint32_t)g_scarlet_main_core; return 1;
+    case 0x1A: { /* ArbitrateLock(owner, mutex, requester) */
+        uint32_t r = scarlet_arbitrate_lock((uint32_t)x[0], x[1], (uint32_t)x[2]);
+        trace_printf("Scarlet ArbitrateLock owner=%x addr=%llx tag=%x -> %x\n",
+                     (uint32_t)c->x[0], (unsigned long long)c->x[1],
+                     (uint32_t)c->x[2], r);
+        x[0] = r;
+        return 1;
+    }
+    case 0x1B: { /* ArbitrateUnlock(mutex) */
+        uint64_t addr = x[0];
+        uint32_t before = scarlet_mutex_load(addr);
+        scarlet_mutex_unlock(addr);
+        trace_printf("Scarlet ArbitrateUnlock addr=%llx word=%08x -> 0\n",
+                     (unsigned long long)addr, before);
+        x[0] = 0;
+        return 1;
+    }
+    case 0x1C: { /* WaitProcessWideKeyAtomic(mutex,key,tag,timeout) */
+        uint64_t mutex = x[0], key = x[1];
+        uint32_t tag = (uint32_t)x[2];
+        int64_t timeout = (int64_t)x[3];
+        uint32_t r = scarlet_wait_process_wide_key(mutex, key, tag, timeout);
+        trace_printf("Scarlet WaitProcessWideKey mutex=%llx key=%llx tag=%x timeout=%lld -> %x\n",
+                     (unsigned long long)mutex, (unsigned long long)key, tag,
+                     (long long)timeout, r);
+        x[0] = r;
+        return 1;
+    }
+    case 0x1D: { /* SignalProcessWideKey(key,count) */
+        uint64_t key = x[0];
+        int32_t count = (int32_t)x[1];
+        scarlet_signal_process_wide_key(key, count);
+        trace_printf("Scarlet SignalProcessWideKey key=%llx count=%d\n",
+                     (unsigned long long)key, count);
+        x[0] = 0;
+        return 1;
+    }
     case 0x1E: /* GetSystemTick */
         x[0] = guest_cntpct(); return 1;
     case 0x24: /* GetProcessId */
