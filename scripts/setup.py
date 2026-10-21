@@ -1333,6 +1333,29 @@ def how_to_run(cx):
     say('with the environment variables SSBU_ROMFS=%s  SSBU_USERDATA=<saves>  (options: BUILDING.md)' % d.get('romfs', '<romfs>'))
 
 
+def _reexec_project_python_if_available():
+    """Use the repository's provisioned Python on Windows builds.
+
+    The installer/bootstrap keeps binary Python dependencies such as lz4,
+    zstandard, Unicorn and Capstone in deps\\python. Users frequently invoke
+    setup.py with their unrelated system Python; relaunch transparently rather
+    than asking them to duplicate those packages globally.
+    """
+    if os.name != 'nt' or os.environ.get('SCARLET_PROJECT_PYTHON') == '1':
+        return
+    private = os.path.join(REPO, 'deps', 'python', 'python.exe')
+    if not os.path.isfile(private):
+        return
+    current = os.path.normcase(os.path.abspath(sys.executable))
+    wanted = os.path.normcase(os.path.abspath(private))
+    if current == wanted:
+        return
+    say('  setup: switching from %s to project Python %s' % (sys.executable, private))
+    env = os.environ.copy()
+    env['SCARLET_PROJECT_PYTHON'] = '1'
+    os.execve(private, [private, os.path.abspath(__file__)] + sys.argv[1:], env)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--dump', help='folder with exefs\\ and romfs\\ (and optionally sysdata\\) dumped from your console')
@@ -1369,6 +1392,8 @@ def main():
     ap.add_argument('--dry-run', action='store_true', help='check the tools and the dump (step deps), then list what would run')
     ap.add_argument('--status', action='store_true'), ap.add_argument('--steps', action='store_true'), ap.add_argument('--run', action='store_true')
     a = ap.parse_args()
+    if not (a.steps or a.status or a.run):
+        _reexec_project_python_if_available()
     if a.steps:
         say(' '.join(STEPS))
         return 0
