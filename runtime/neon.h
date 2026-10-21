@@ -31,7 +31,8 @@ static inline int64_t vsext(uint64_t x, int sz) {
 /* AArch64 FMAX/FMIN propagate NaN; the NM variants return the number: exact versions in fpexact.h (fp_maxmin32 / 64). */
 
 enum { F_ADD, F_SUB, F_MUL, F_DIV, F_MLA, F_MLS, F_MAX, F_MIN, F_MAXNM, F_MINNM, F_ABD,
-       F_CMEQ, F_CMGE, F_CMGT, F_RECPS, F_RSQRTS, F_ADDP };
+       F_CMEQ, F_CMGE, F_CMGT, F_RECPS, F_RSQRTS, F_ADDP,
+       F_MAXP, F_MINP, F_MAXNMP, F_MINNMP };
 
 static inline float f3s(int op, float acc, float a, float b, uint32_t *mask, int *is_mask) {
     switch (op) {
@@ -80,11 +81,25 @@ static inline double f3d(int op, double acc, double a, double b, uint64_t *mask,
 static inline void v_f3v(V128 *d, const V128 *pn, const V128 *pm, int op, int dbl, int n) {
     V128 a = *pn, b = *pm, acc = *d, r;
     r.d[0] = 0; r.d[1] = 0;
-    if (op == F_ADDP) {
-        if (dbl) { r.df[0] = a.df[0] + a.df[1]; if (n == 2) r.df[1] = b.df[0] + b.df[1]; }
-        else {
-            for (int i = 0; i < n / 2; i++) r.f[i] = a.f[2 * i] + a.f[2 * i + 1];
-            for (int i = 0; i < n / 2; i++) r.f[n / 2 + i] = b.f[2 * i] + b.f[2 * i + 1];
+    if (op == F_ADDP || op == F_MAXP || op == F_MINP || op == F_MAXNMP || op == F_MINNMP) {
+        int is_min = op == F_MINP || op == F_MINNMP;
+        int num = op == F_MAXNMP || op == F_MINNMP;
+        if (dbl) {
+            if (op == F_ADDP) r.df[0] = a.df[0] + a.df[1];
+            else r.d[0] = fp_maxmin64_bits(a.d[0], a.d[1], is_min, num);
+            if (n == 2) {
+                if (op == F_ADDP) r.df[1] = b.df[0] + b.df[1];
+                else r.d[1] = fp_maxmin64_bits(b.d[0], b.d[1], is_min, num);
+            }
+        } else {
+            for (int i = 0; i < n / 2; i++) {
+                if (op == F_ADDP) r.f[i] = a.f[2 * i] + a.f[2 * i + 1];
+                else r.w[i] = fp_maxmin32_bits(a.w[2 * i], a.w[2 * i + 1], is_min, num);
+            }
+            for (int i = 0; i < n / 2; i++) {
+                if (op == F_ADDP) r.f[n / 2 + i] = b.f[2 * i] + b.f[2 * i + 1];
+                else r.w[n / 2 + i] = fp_maxmin32_bits(b.w[2 * i], b.w[2 * i + 1], is_min, num);
+            }
         }
         *d = r;
         return;
