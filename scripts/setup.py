@@ -1356,7 +1356,12 @@ def _reexec_project_python_if_available():
     say('  setup: switching from %s to project Python %s' % (sys.executable, private))
     env = os.environ.copy()
     env['SCARLET_PROJECT_PYTHON'] = '1'
-    os.execve(private, [private, os.path.abspath(__file__)] + sys.argv[1:], env)
+    # On Windows os.execve() can lose quoting when reconstructing a command
+    # line from argv (notably --dump paths containing spaces). subprocess
+    # applies Windows list2cmdline quoting correctly, so preserve every argv
+    # element exactly and propagate the child exit status.
+    child = subprocess.run([private, os.path.abspath(__file__)] + sys.argv[1:], env=env)
+    raise SystemExit(child.returncode)
 
 
 def main():
