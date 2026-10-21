@@ -999,6 +999,23 @@ def step_lift(cx):
     module_map = os.path.join(cx.build, 'scarlet_module_map.json')
     cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_module_map.py'),
                     '--bin', cx.bin, '--out', module_map], env=cx.env(), log='module_map')
+
+    probe_root = os.path.join(cx.build, 'lift')
+    reuse_probe = bool(getattr(cx.a, 'reuse_probe_lift', False))
+    if reuse_probe:
+        missing = [m for m in profile.STATIC_MODULES
+                   if not os.path.isfile(os.path.join(probe_root, m, 'table.c'))]
+        if missing:
+            raise Fail('--reuse-probe-lift requested but build\\lift is missing: ' + ', '.join(missing))
+        combined = os.path.join(cx.work, 'gen_eh_o2')
+        cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_combine_lift.py'),
+                        '--lift', probe_root, '--out', combined, '--module-map', module_map],
+               env=cx.env(), log='combine_lift')
+        n = len([name for name in os.listdir(combined) if name.endswith('.c')])
+        say('  Scarlet: reused build\\lift probe output -> %d combined C files (%.0f MB)' %
+            (n, disk_mb(combined)))
+        return
+
     lift_root = os.path.join(cx.work, 'lift_modules')
     os.makedirs(lift_root, exist_ok=True)
     total_files = 0
@@ -1346,6 +1363,8 @@ def main():
                     'shorter compile on a weak PC, a slower game (the main thread about 25-30 %% slower)')
     ap.add_argument('--full-check', action='store_true', help='the check step also runs the lifter\'s differential test against '
                     'Unicorn (minutes on a fast PC, up to an hour on a weak one; it tests the translator, the same everywhere)')
+    ap.add_argument('--reuse-probe-lift', action='store_true',
+                    help='reuse build\\lift/{main,sdk,subsdk0} produced by scarlet_lift_probe.py instead of lifting again')
     ap.add_argument('--only', help='run only this step')
     ap.add_argument('--dry-run', action='store_true', help='check the tools and the dump (step deps), then list what would run')
     ap.add_argument('--status', action='store_true'), ap.add_argument('--steps', action='store_true'), ap.add_argument('--run', action='store_true')
