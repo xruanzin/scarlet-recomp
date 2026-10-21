@@ -18,6 +18,7 @@ typedef struct {
      * them; only a DLL built from a site list calls them. */
     void (*site_inline)(Ctx *, uint64_t);
     int (*site_midhook)(Ctx *, uint64_t);
+    uint64_t (*guest_cntpct)(void);          /* Scarlet: ARM generic physical timer */
 } GameHost;
 
 typedef struct {
@@ -41,6 +42,7 @@ void stx_diag(Ctx *c, uint64_t a, uint64_t expected, uint64_t seen, uint64_t v, 
  * returns at once with the current registers. */
 void sky_site_inline(Ctx *c, uint64_t addr) { host.site_inline(c, addr); }
 int sky_site_midhook(Ctx *c, uint64_t addr) { return host.site_midhook(c, addr); }
+uint64_t guest_cntpct(void) { return host.guest_cntpct ? host.guest_cntpct() : 0; }
 
 __declspec(dllexport) void game_bind(const GameHost *h, GameTables *t) {
     host = *h;
