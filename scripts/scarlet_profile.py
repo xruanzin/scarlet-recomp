@@ -18,6 +18,15 @@ MAIN_BUILD_ID_PREFIX = MAIN_BUILD_ID[:16]
 
 # Scarlet's static ExeFS code modules that scarlet_pc already recompiles.
 STATIC_MODULES = ("main", "sdk", "subsdk0")
+# Guest entry points discovered only through indirect calls during real boot.
+# Keep these sparse: recomp.py splits the containing function at each address,
+# so regenerating a module rewrites only the affected source bucket(s).
+LATE_INDIRECT_STARTS = {
+    "main": (),
+    "sdk": (0x700657C59C,),
+    "subsdk0": (),
+}
+
 MODULE_BASES = {
     "main": 0x7000000000,
     "sdk": 0x7006000000,
