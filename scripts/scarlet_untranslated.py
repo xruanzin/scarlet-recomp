@@ -22,7 +22,28 @@ SITE_RE = re.compile(
 )
 
 
+def _ensure_private_python_for_capstone():
+    try:
+        import capstone  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+    private = os.path.join(REPO, "deps", "python", "python.exe")
+    same = (os.path.normcase(os.path.abspath(sys.executable)) ==
+            os.path.normcase(os.path.abspath(private)))
+    if os.path.isfile(private) and not same:
+        print("Capstone is not installed in %s; relaunching with project Python: %s" %
+              (sys.executable, private), flush=True)
+        os.execv(private, [private, os.path.abspath(__file__)] + sys.argv[1:])
+    raise RuntimeError(
+        "Python dependency 'capstone' is not available. Run once:\n"
+        "  powershell.exe -NoProfile -ExecutionPolicy Bypass "
+        "-File scripts\\bootstrap.ps1 -NoLaunch"
+    )
+
+
 def decoder():
+    _ensure_private_python_for_capstone()
     import capstone
     arch = getattr(capstone, "CS_ARCH_AARCH64",
                    getattr(capstone, "CS_ARCH_ARM64", None))
