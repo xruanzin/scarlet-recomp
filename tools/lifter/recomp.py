@@ -67,6 +67,8 @@ def _layout(img):
 
 
 TEXT_SIZE, RELA, RELASZ, JMPREL, PLTRELSZ, SYMTAB, STRTAB = _layout(IMG)
+MOD0_OFF = struct.unpack_from('<I', IMG, FILE_OFF + 4)[0]
+MODULE_HEADER_END = MOD0_OFF + 0x20      # NSO lead-in + MOD0 metadata are not executable instructions
 
 
 # Instruction patch list (N3, plan\phases\N3_new_kind.md): DEFAULT OFF. A patch replaces one instruction word of the
@@ -1187,7 +1189,8 @@ class Env:
             print('function-start sources %s: BL=%d reloc=%d (rejected padding=%d) materialised=%d (rejected padding=%d) exports=%d'
                   % (MODULE, len(direct), len(reloc_candidates), reloc_rejected,
                      len(materialised), materialised_rejected, len(exports)))
-        self.starts = sorted(a for a in starts if BASE <= a < BASE + TEXT_SIZE)
+        self.starts = sorted(a for a in starts
+                             if BASE + MODULE_HEADER_END <= a < BASE + TEXT_SIZE)
         return self.starts
 
     def extent(self, entry):
