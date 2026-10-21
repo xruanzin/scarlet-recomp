@@ -838,6 +838,7 @@ class Fn:
                           (1, 0, 0x1e): 'F_MAXP', (1, 1, 0x1e): 'F_MINP',
                           (1, 0, 0x18): 'F_MAXNMP', (1, 1, 0x18): 'F_MINNMP',
                           (0, 0, 0x1c): 'F_CMEQ', (1, 0, 0x1c): 'F_CMGE', (1, 1, 0x1c): 'F_CMGT',
+                          (1, 0, 0x1d): 'F_ACGE', (1, 1, 0x1d): 'F_ACGT',
                           (0, 0, 0x1f): 'F_RECPS', (0, 1, 0x1f): 'F_RSQRTS'}.get((u, a, opc))
                     if op is None or (op in ('F_ADDP', 'F_MAXP', 'F_MINP', 'F_MAXNMP', 'F_MINNMP') and scalar):
                         raise Unimpl('simd-f3')
@@ -853,6 +854,8 @@ class Fn:
                     (0, 0x01): 'IX2_SQADD', (1, 0x01): 'IX2_UQADD',
                     (0, 0x05): 'IX2_SQSUB', (1, 0x05): 'IX2_UQSUB',
                     (0, 0x16): 'IX2_SQDMULH', (1, 0x16): 'IX2_SQRDMULH',
+                    (0, 0x09): 'IX2_SQSHL', (1, 0x09): 'IX2_UQSHL',
+                    (0, 0x0b): 'IX2_SQRSHL', (1, 0x0b): 'IX2_UQRSHL',
                 }.get((u, opc))
                 if extra:
                     if scalar and extra in ('IX2_SHADD', 'IX2_UHADD', 'IX2_SRHADD', 'IX2_URHADD',
