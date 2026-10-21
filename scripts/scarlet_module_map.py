@@ -126,6 +126,7 @@ def build_map(bin_dir):
                 target = candidates[0]
                 target = dict(target)
                 target["resolution"] = "unique"
+                target["hle_override"] = imp["name"] in profile.HLE_OVERRIDE_SYMBOLS
                 r[imp["name"]] = target
             elif not candidates:
                 u.append(imp["name"])
@@ -138,6 +139,7 @@ def build_map(bin_dir):
                 ordered = sorted(candidates, key=lambda x: rank.get(x["module"], 1 << 30))
                 target = dict(ordered[0])
                 target["resolution"] = "module-load-order"
+                target["hle_override"] = imp["name"] in profile.HLE_OVERRIDE_SYMBOLS
                 target["alternatives"] = ordered[1:]
                 r[imp["name"]] = target
         resolutions[name] = r
