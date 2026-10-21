@@ -429,15 +429,18 @@ def step_deps(cx):
                 cx.state.setdefault('done', {}).pop(s, None)
         cx.state['runtime_exe'] = exe_sha
     missing = []
-    # Pillow (gen_sdktest.py) and unicorn (the differential test) are needed only when the exe is built here
-    for mod, pkg in (('numpy', 'numpy'), ('lz4.block', 'lz4'), ('zstandard', 'zstandard')) + ((('PIL', 'Pillow'), ('unicorn', 'unicorn')) if not a.runtime else ()):
+    # Scarlet's build path needs these packages for dump conversion/compression.
+    # The old SSBU-only sdktest/Unicorn differential stages are disabled for
+    # Scarlet, so Pillow and Unicorn must not block a normal native build.
+    for mod, pkg in (('numpy', 'numpy'), ('lz4.block', 'lz4'), ('zstandard', 'zstandard')):
         try:
             __import__(mod)
         except ImportError:
             missing.append(pkg)
     if missing:
-        raise Fail('missing Python packages: %s   (pip install %s)' % (', '.join(missing), ' '.join(missing)))
-    say('  python packages: numpy lz4 zstandard%s: ok' % ('' if a.runtime else ' Pillow unicorn'))
+        raise Fail('missing Python packages in %s: %s   (pip install %s)' %
+                   (sys.executable, ', '.join(missing), ' '.join(missing)))
+    say('  python packages: numpy lz4 zstandard: ok')
 
     deps = os.path.join(REPO, 'deps')
     def is_9(d):                                   # another LLVM version installed on the PC is not used unless asked for
