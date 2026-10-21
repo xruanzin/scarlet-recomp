@@ -55,6 +55,22 @@ def run_module(name, bin_dir, out_root, jobs):
     output = "".join(lines)
     if code:
         return {"module": name, "ok": False, "code": code}
+
+    late = getattr(profile, "LATE_INDIRECT_STARTS", {}).get(name, ())
+    if late:
+        table_path = os.path.join(out, "table.c")
+        try:
+            table_text = open(table_path, encoding="latin-1").read().lower()
+        except OSError:
+            print("FATAL: generated table missing:", table_path, flush=True)
+            return {"module": name, "ok": False, "code": 97}
+        missing_late = [x for x in late if ("0x%xull" % x).lower() not in table_text]
+        if missing_late:
+            print("FATAL: late target(s) absent from generated %s table: %s" %
+                  (name, ", ".join(hex(x) for x in missing_late)), flush=True)
+            return {"module": name, "ok": False, "code": 98}
+        print("verified late targets in %s/table.c: %s" %
+              (name, ", ".join(hex(x) for x in late)), flush=True)
     m = re.search(r"functions:\s+(\d+).*instructions:\s+(\d+)\s+not translated:\s+(\d+)", output)
     return {
         "module": name,
