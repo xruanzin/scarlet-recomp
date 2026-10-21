@@ -36,12 +36,19 @@ def run_module(name, bin_dir, out_root, jobs):
     env["PYTHONUNBUFFERED"] = "1"
     cmd = [project_python(), os.path.join(lifter_dir, "recomp_eh.py"), out, str(jobs)]
     print("\n== %s @ %#x ==" % (name, profile.MODULE_BASES[name]), flush=True)
-    p = subprocess.run(cmd, cwd=lifter_dir, env=env, text=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    print(p.stdout, end="")
-    if p.returncode:
-        return {"module": name, "ok": False, "code": p.returncode}
-    m = re.search(r"functions:\s+(\d+).*instructions:\s+(\d+)\s+not translated:\s+(\d+)", p.stdout)
+    p = subprocess.Popen(
+        cmd, cwd=lifter_dir, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+    lines = []
+    assert p.stdout is not None
+    for line in p.stdout:
+        print(line, end="", flush=True)
+        lines.append(line)
+    code = p.wait()
+    output = "".join(lines)
+    if code:
+        return {"module": name, "ok": False, "code": code}
+    m = re.search(r"functions:\s+(\d+).*instructions:\s+(\d+)\s+not translated:\s+(\d+)", output)
     return {
         "module": name,
         "ok": True,
