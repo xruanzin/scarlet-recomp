@@ -30,7 +30,7 @@ static unsigned char self_settings[32];
 enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESSION,
        SERVICE_APPLET, SERVICE_PROXY, SERVICE_COMMON, SERVICE_SELF, SERVICE_WINDOW,
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
-       SERVICE_AOC };
+       SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 
 static uint32_t new_session(unsigned char service) {
@@ -143,6 +143,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             else if (!strcmp(name, "apm")) moved = new_session(SERVICE_APM);
             else if (!strcmp(name, "appletOE")) moved = new_session(SERVICE_APPLET);
             else if (!strcmp(name, "aoc:u")) moved = new_session(SERVICE_AOC);
+            else if (!strcmp(name, "ectx:aw")) moved = new_session(SERVICE_ECTX_AW);
             else {
                 printf("Scarlet SM GetService '%s' is not implemented\n", name);
                 goto unsupported;
@@ -223,6 +224,18 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             if (!copied) result = 0xd201;
         } else if (service == SERVICE_AOC && cmd == 9) {
             value = 0; data_size = 4; /* no lost add-on-content error */
+        } else if (service == SERVICE_ECTX_AW && cmd == 0) {
+            /* IWriterForApplication::CreateContextRegistrar. Error-context
+             * collection is optional for gameplay; return a live registrar
+             * object so the SDK can complete/commit its bootstrap context. */
+            moved = new_session(SERVICE_ECTX_REGISTRAR);
+            if (!moved) result = 0xd201;
+        } else if (service == SERVICE_ECTX_AW && cmd == 1) {
+            /* CommitContext: there is no host error-report database yet. The
+             * contract is satisfied once the context was accepted. */
+        } else if (service == SERVICE_ECTX_REGISTRAR && cmd == 0) {
+            /* IContextRegistrar::Complete. The guest has finished populating
+             * its context descriptors; nothing needs to be persisted here. */
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
