@@ -43,7 +43,8 @@ HOST_SOURCES = ['hostrt.c', 'boot.c', 'nnsdk.c', 'libcxx.c', 'os_threads.c', 'nv
 # (taken only when present: a tree without the online files, e.g. a public one before they are published, still links)
 HOST_SOURCES[:] = [n for n in HOST_SOURCES if n not in ('nnldn.c', 'net_relay.c', 'rb_net.c') or os.path.exists(os.path.join(HERE, n))]   # rb_net.c: online rollback (R3), off unless SSBU_RB_NET
 if SCARLET:
-    HOST_SOURCES.extend(['scarlet_loader.c', 'scarlet_ipc.c', 'scarlet_memory.c', 'scarlet_threads.c'])
+    HOST_SOURCES.extend(['scarlet_loader.c', 'scarlet_ipc.c', 'scarlet_memory.c', 'scarlet_threads.c',
+                         'scarlet_allocator.c'])
 # Everything of the host that is derived from the dump is linked into the game DLL instead (game_data.h): the exe is made
 # of the runtime's own sources only and can be built without a dump (scripts/make_release.py).
 GAME_DATA_SOURCES = ['game_data.c', 'sdkdata.c', 'nro_registry.c', 'sdklift_gen.c']
