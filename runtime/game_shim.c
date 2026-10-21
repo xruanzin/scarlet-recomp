@@ -20,6 +20,7 @@ typedef struct {
     int (*site_midhook)(Ctx *, uint64_t);
     uint64_t (*guest_cntpct)(void);          /* Scarlet: ARM generic physical timer */
     uint64_t (*guest_tpidrro)(Ctx *);        /* Scarlet: TPIDRRO_EL0 / TLR, appended ABI field */
+    void (*scarlet_stdalloc)(Ctx *, int);    /* Scarlet: host-backed nn::mem::StandardAllocator */
 } GameHost;
 
 typedef struct {
@@ -45,6 +46,10 @@ void sky_site_inline(Ctx *c, uint64_t addr) { host.site_inline(c, addr); }
 int sky_site_midhook(Ctx *c, uint64_t addr) { return host.site_midhook(c, addr); }
 uint64_t guest_cntpct(void) { return host.guest_cntpct ? host.guest_cntpct() : 0; }
 uint64_t guest_tpidrro(Ctx *c) { return host.guest_tpidrro ? host.guest_tpidrro(c) : c->tpidr; }
+void scarlet_stdalloc_hle(Ctx *c, int op) {
+    if (host.scarlet_stdalloc) host.scarlet_stdalloc(c, op);
+    else guest_trap("Scarlet StandardAllocator HLE is not bound", (uint64_t)op);
+}
 
 __declspec(dllexport) void game_bind(const GameHost *h, GameTables *t) {
     host = *h;
