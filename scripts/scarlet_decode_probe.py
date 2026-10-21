@@ -72,6 +72,18 @@ CASES = [
     ("ld4-elem",  0x0dff603c),
     ("pmull",     0x0ee1e002),
     ("pmull2",    0x4ee1e000),
+    ("cntpct",    0xd53be020),
+    ("msr-nzcv",  0xd51b4204),
+    ("dc-civac",  0xd50b7e29),
+    ("dc-cvau",   0xd50b7b2a),
+    ("ic-ivau",   0xd50b7529),
+    ("rev16-v",   0x4e201800),
+    ("fcvtas-v",  0x4e21cbfd),
+    ("fcvtzs-fx", 0x4f37fc63),
+    ("fcvtzs-d",  0x4f7cfc00),
+    ("sqxtn-h",   0x5e614a11),
+    ("sqxtn-s",   0x5ea14a32),
+    ("smlal-elem-long", 0x0f862060),
 ]
 
 env = recomp.Env()
