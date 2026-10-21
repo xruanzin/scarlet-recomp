@@ -19,7 +19,7 @@
 #include "hostrt.h"
 
 #define STD_BASE  0x7240000000ULL
-#define STD_LIMIT (STD_BASE + 0x00CD500000ULL)
+#define STD_LIMIT (STD_BASE + 0x00D0000000ULL)
 #define COMMIT_GRANULE 0x01000000ULL
 
 enum {
