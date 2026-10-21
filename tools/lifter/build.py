@@ -27,19 +27,23 @@ CLANG = os.environ.get('RECOMP_CLANG', r'C:\llvm-8.0.0\bin\clang.exe')      # sc
 TARGET_LINUX = os.environ.get('RECOMP_TARGET') == 'linux'
 TARGET_MACOS = os.environ.get('RECOMP_TARGET') == 'macos'
 TARGET_POSIX = TARGET_LINUX or TARGET_MACOS
+SCARLET = os.environ.get('RECOMP_SCARLET', '') not in ('', '0')
+SCARLET_FLAGS = ['-DSCARLET_RECOMP'] if SCARLET else []
 PLAT_FLAGS = ['-fPIC', '-fvisibility=hidden', '-include', os.path.join(HERE, 'plat', 'plat_pre.h')] if TARGET_POSIX else []
 MACOS_MIN = ['-mmacosx-version-min=14.4'] if TARGET_MACOS else []     # os_sync_wait_on_address (plat_posix.c): macOS 14.4+
 PLAT_FLAGS += MACOS_MIN
 # Linux x86-64: 16-byte atomics (the lifted LDXP/STXP, CASP) inline as cmpxchg16b, as clang does by default for Windows x64;
 # without it -O1 code calls __atomic_compare_exchange_16 (libatomic), which the libraries are not linked with
 PLAT_FLAGS += ['-mcx16'] if TARGET_LINUX else []
-CFLAGS = ['-c', '-O1', '-w', '-fno-strict-aliasing', '-I', HERE, '-I', GEN] + PLAT_FLAGS
+CFLAGS = ['-c', '-O1', '-w', '-fno-strict-aliasing', '-I', HERE, '-I', GEN] + PLAT_FLAGS + SCARLET_FLAGS
 HOST_SOURCES = ['hostrt.c', 'boot.c', 'nnsdk.c', 'libcxx.c', 'os_threads.c', 'nvn_stub.c', 'nvn_gl.c', 'nvn_vk.c', 'mx_translate.c', 'tex_decode.c', 'nnfs.c', 'clib.c', 'nntime.c', 'nnhid.c', 'nnpad_sdl.c', 'nnpad_gca.c', 'display.c', 'nnpl.c', 'nnfontll.c', 'nnmovie.c', 'nnmisc.c', 'nnaudio.c', 'nnro.c', 'nnmovie_mf.c', 'nniostream.c', 'nncxxrt.c', 'nncxxlib.c', 'nnlibc2.c',
                 'sdklift_rt.c', 'nnsdk2.c', 'nnmii.c', 'nnapplet.c', 'nnalbum.c', 'nnnet.c', 'nnfsdir.c', 'nnunwind.c', 'nvn_sdk.c', 'nvn_c4.c', 'nvn_c5.c', 'hitch.c', 'gfx_options.c', 'debug_mode.c', 'r1_state.c',
                 'loose_host.c', 'osk.c', 'nnldn.c', 'net_relay.c', 'rb_net.c']    # the new fighters' file layer (loose_files.c): off unless SSBU_CHARACTERS / SSBU_LOOSE_FILES is set
 # nnldn.c / net_relay.c: online play over the game's Local Wireless (plan/phases/N3_local_wireless_online.md), off unless SSBU_ONLINE
 # (taken only when present: a tree without the online files, e.g. a public one before they are published, still links)
 HOST_SOURCES[:] = [n for n in HOST_SOURCES if n not in ('nnldn.c', 'net_relay.c', 'rb_net.c') or os.path.exists(os.path.join(HERE, n))]   # rb_net.c: online rollback (R3), off unless SSBU_RB_NET
+if SCARLET:
+    HOST_SOURCES.append('scarlet_loader.c')
 # Everything of the host that is derived from the dump is linked into the game DLL instead (game_data.h): the exe is made
 # of the runtime's own sources only and can be built without a dump (scripts/make_release.py).
 GAME_DATA_SOURCES = ['game_data.c', 'sdkdata.c', 'nro_registry.c', 'sdklift_gen.c']
@@ -87,7 +91,7 @@ def cmd_compile(jobs, force):
         known = json.load(open(hpath))
     except (OSError, ValueError):
         known = {}
-    hh = hashlib.sha1(repr([os.environ.get(k, '') for k in ('RECOMP_CFLAGS', 'RECOMP_INLINE', 'RECOMP_OPT', 'RECOMP_TARGET', 'RECOMP_NOCRT')]).encode())
+    hh = hashlib.sha1(repr([os.environ.get(k, '') for k in ('RECOMP_CFLAGS', 'RECOMP_INLINE', 'RECOMP_OPT', 'RECOMP_TARGET', 'RECOMP_NOCRT', 'RECOMP_SCARLET')]).encode())
     for h in GEN_HEADERS:
         with open(os.path.join(HERE, h), 'rb') as f:
             hh.update(f.read())
