@@ -1137,9 +1137,20 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
                     (unsigned long long)size, (unsigned long long)c->fn,
                     (unsigned long long)c->x[30]);
         }
-        /* A real Break is a guest fatal condition. Do not return success and
-         * continue with corrupted SDK state; preserve the crash after emitting
-         * the actual nn::Result that caused it. */
+        /* Bring-up mode: jump directly to the rtld boundary instead of
+         * returning from Nintendo's noreturn Abort function. This is safer than
+         * pretending svcBreak returned and is opt-in only. */
+        if (getenv("SCARLET_FORCE_BOOT") && strcmp(getenv("SCARLET_FORCE_BOOT"), "0") != 0) {
+            extern int scarlet_rtld_init_seen(void);
+            extern void scarlet_force_boot_after_fatal(Ctx *, uint32_t);
+            if (!scarlet_rtld_init_seen()) {
+                uint32_t effective = readable ? result : (uint32_t)reason;
+                scarlet_force_boot_after_fatal(c, effective);
+                return 1; /* force path normally never returns */
+            }
+        }
+
+        /* Normal mode preserves Horizon fatal semantics. */
         guest_trap("Scarlet svcBreak", readable ? result : reason);
         return 1;
     }
