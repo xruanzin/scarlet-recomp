@@ -514,6 +514,41 @@ void call_guest(Ctx *c, uint64_t addr) {
     set_cur_ctx(saved);
 }
 
+void scarlet_dump_guest_stack_now(Ctx *c, const char *tag) {
+#ifdef SCARLET_RECOMP
+    CONTEXT ctx;
+    RtlCaptureContext(&ctx);
+    fprintf(stderr, "\n[Scarlet diagnostic] %s: guest=f_%llx lr=%llx\n",
+            tag ? tag : "stack", (unsigned long long)(c ? c->fn : 0),
+            (unsigned long long)(c ? c->x[30] : 0));
+    fprintf(stderr, "[Scarlet diagnostic] guest call stack (innermost first):\n");
+    uint64_t last = 0;
+    for (int depth = 0, shown = 0; depth < 400 && shown < 32; ++depth) {
+        uint64_t g = guest_function_of(ctx.Rip);
+        if (g && g != last) {
+            uint64_t sa = 0;
+            const char *sn = scarlet_symbolize_static_address(g, &sa);
+            if (sn) fprintf(stderr, "  f_%llx  %s+0x%llx\n",
+                            (unsigned long long)g, sn,
+                            (unsigned long long)(g - sa));
+            else fprintf(stderr, "  f_%llx\n", (unsigned long long)g);
+            last = g; ++shown;
+        }
+        DWORD64 image_base;
+        RUNTIME_FUNCTION *rf = RtlLookupFunctionEntry(ctx.Rip, &image_base, NULL);
+        if (!rf) break;
+        void *handler_data;
+        DWORD64 establisher;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, rf, &ctx,
+                         &handler_data, &establisher, NULL);
+        if (!ctx.Rip) break;
+    }
+    fflush(stderr);
+#else
+    (void)c; (void)tag;
+#endif
+}
+
 static void dump_guest_registers(void) {
     Ctx *c = t_cur_ctx;
     if (!c) return;
