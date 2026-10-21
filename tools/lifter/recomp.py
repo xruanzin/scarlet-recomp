@@ -12,6 +12,7 @@ import os
 import struct
 import sys
 import collections
+import json
 
 # Target selection. The original ssbu-recomp defaults are preserved so the
 # upstream lifter can still be compared directly, while game ports select a
@@ -27,6 +28,21 @@ BASE = int(os.environ.get('RECOMP_BASE', '0x7100000000'), 0)
 FILE_OFF = 0x1000
 
 IMG = open(ELF, 'rb').read()
+
+# Optional cross-module symbol map generated from the user's own dump. This
+# keeps the generic upstream behavior unchanged unless a port supplies one.
+# Only code exports are accepted as direct call targets.
+DIRECT_IMPORTS = {}
+_module_map = os.environ.get('RECOMP_MODULE_MAP')
+if _module_map and os.path.isfile(_module_map):
+    with open(_module_map, encoding='utf-8') as _f:
+        _map = json.load(_f)
+    for _name, _target in _map.get('resolutions', {}).get(MODULE, {}).items():
+        try:
+            if _target.get('in_text'):
+                DIRECT_IMPORTS[_name] = int(_target['address'])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
 
 
 def _layout(img):
@@ -903,10 +919,13 @@ class Env:
     def call(self, target):
         if target in self.overrides:
             return 'h_%s(c);' % self.overrides[target]
+        name = self.plt_symbol(target)
+        direct = DIRECT_IMPORTS.get(name) if name else None
+        if direct is not None:
+            return 'f_%x(c);' % direct
         if self.full:
             self.wanted.setdefault(target, None)
             return 'f_%x(c);' % target
-        name = self.plt_symbol(target)
         if name:
             self.imports.add(name)
             return 'imp_%s(c);' % mangle(name)
@@ -964,6 +983,10 @@ def lift_function(env, entry):
         plt = env.plt_entry(entry)
         if plt:
             sym, shndx, value = plt
+            name = env.plt_symbol(entry)
+            direct = DIRECT_IMPORTS.get(name) if name else None
+            if direct is not None:
+                return 'void f_%x(Ctx *c) { f_%x(c); }' % (entry, direct), 0, []
             if shndx:                                    # symbol defined inside this module
                 env.wanted.setdefault(BASE + value, None)
                 return 'void f_%x(Ctx *c) { f_%x(c); }' % (entry, BASE + value), 0, []
