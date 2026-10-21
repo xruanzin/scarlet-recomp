@@ -69,6 +69,8 @@ def scan_module(root, module, md):
     mnemonics = collections.Counter()
     pairs = collections.Counter()
     words = collections.Counter()
+    exact = collections.Counter()
+    exact_examples = {}
     examples = {}
     files = sites = 0
     if not os.path.isdir(path):
@@ -89,6 +91,8 @@ def scan_module(root, module, md):
             mnemonics[mnemonic] += 1
             pairs[(reason, mnemonic)] += 1
             words[(reason, mnemonic, word)] += 1
+            exact[(reason, mnemonic, op_str, word)] += 1
+            exact_examples.setdefault((reason, mnemonic, op_str, word), addr)
             examples.setdefault((reason, mnemonic), {
                 "address": addr,
                 "word": word,
@@ -103,6 +107,8 @@ def scan_module(root, module, md):
         "mnemonics": mnemonics,
         "pairs": pairs,
         "words": words,
+        "exact": exact,
+        "exact_examples": exact_examples,
         "examples": examples,
     }
 
@@ -122,6 +128,17 @@ def serialise(result):
                 "example": result["examples"][(reason, mnemonic)],
             }
             for (reason, mnemonic), count in result["pairs"].most_common()
+        ],
+        "exact": [
+            {
+                "reason": reason,
+                "mnemonic": mnemonic,
+                "op_str": op_str,
+                "word": "0x%08x" % word,
+                "count": count,
+                "address": result["exact_examples"][(reason, mnemonic, op_str, word)],
+            }
+            for (reason, mnemonic, op_str, word), count in result["exact"].most_common()
         ],
         "top_words": [
             {
@@ -167,6 +184,22 @@ def main(argv=None):
     print("\n  combined: %d untranslated sites" % total)
     for mnemonic, count in combined.most_common(a.top):
         print("    %-12s %8d" % (mnemonic, count))
+
+    # Once the residual is small, print every exact encoding/operand form.
+    # This is especially important for MRS/MSR: grouping only by mnemonic hides
+    # which architectural system register is still unsupported.
+    if total <= 500:
+        print("\n  exact residual encodings:")
+        exact_all = collections.Counter()
+        exact_addr = {}
+        for r in results:
+            exact_all.update(r["exact"])
+            for k, v in r["exact_examples"].items():
+                exact_addr.setdefault(k, v)
+        for (reason, mnemonic, op_str, word), count in exact_all.most_common():
+            asm = mnemonic + ((" " + op_str) if op_str else "")
+            print("    %-12s %08x %5d  example %#x  %s" %
+                  (reason, word, count, exact_addr[(reason, mnemonic, op_str, word)], asm))
 
     payload = {
         "format": 1,
