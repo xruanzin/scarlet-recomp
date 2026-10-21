@@ -166,6 +166,18 @@ def main(argv=None):
                len(result["resolutions"][name]), route, len(result["unresolved"][name]),
                len(result["ambiguous"][name])))
     print("  map: %s" % os.path.abspath(a.out))
+    for name in profile.STATIC_MODULES:
+        unresolved = result["unresolved"][name]
+        ambiguous = result["ambiguous"][name]
+        if unresolved:
+            print("\n  %s unresolved external imports (%d):" % (name, len(unresolved)))
+            for symbol in unresolved:
+                print("    " + symbol)
+        if ambiguous:
+            print("\n  %s ambiguous sibling imports (%d):" % (name, len(ambiguous)))
+            for symbol, targets in sorted(ambiguous.items()):
+                desc = ", ".join("%s@%#x" % (t["module"], t["address"]) for t in targets)
+                print("    %s -> %s" % (symbol, desc))
     return 0
 
 
