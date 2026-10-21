@@ -303,6 +303,18 @@ static void scarlet_init_all_static_modules(Ctx *c) {
         scarlet_module_init(c, &g_scarlet_static_modules[i]);
     scarlet_module_init(c, &g_scarlet_static_modules[0]);
 }
+
+/* nn::init::Start receives rtld callbacks. The init callback runs after
+ * nninitStartup, when the SDK allocator/thread state exists, and before
+ * nnMain. The second callback is the companion/fini hook; modern SDKs add a
+ * mark callback in front of them. */
+static void scarlet_rtld_init(Ctx *c) {
+    printf("[Scarlet rtld] init callback\n");
+    trace_printf("=== Scarlet rtld init callback\n");
+    scarlet_init_all_static_modules(c);
+}
+static void scarlet_rtld_fini(Ctx *c) { (void)c; }
+static void scarlet_rtld_mark(Ctx *c) { (void)c; }
 #endif
 
 static DWORD WINAPI guest_main(LPVOID arg) {
@@ -334,15 +346,47 @@ static DWORD WINAPI guest_main(LPVOID arg) {
     g_main_stack_base = (uint64_t)stack;
     g_main_stack_size = stack_size;
 
+#ifdef SCARLET_RECOMP
+    {
+        static const char start_old[] = "_ZN2nn4init5StartEmmPFvvES2_";
+        static const char start_new[] = "_ZN2nn4init5StartEmmPFvvES2_S2_";
+        uint64_t start = scarlet_find_static_symbol(start_old);
+        int modern = 0;
+        if (!start) {
+            start = scarlet_find_static_symbol(start_new);
+            modern = start != 0;
+        }
+        if (!start) {
+            fprintf(stderr, "Scarlet boot: nn::init::Start not found (4/5 arg ABI)\n");
+            guest_trap("Scarlet nn::init::Start not found", 0);
+        }
+        uint64_t init_fn = hostfn_address("<scarlet_rtld_init>", scarlet_rtld_init);
+        uint64_t fini_fn = hostfn_address("<scarlet_rtld_fini>", scarlet_rtld_fini);
+        uint64_t mark_fn = hostfn_address("<scarlet_rtld_mark>", scarlet_rtld_mark);
+        printf("\n[Scarlet boot] nn::init::Start %s ABI @ %llx\n",
+               modern ? "5-arg" : "4-arg", (unsigned long long)start);
+        trace_printf("=== Scarlet nn::init::Start %s ABI @ %llx\n",
+                     modern ? "5-arg" : "4-arg", (unsigned long long)start);
+        /* Horizon's current-thread pseudo handle is what rtld normally passes
+         * as the main-thread handle. x1 is the loader argument (none here). */
+        c.x[0] = 0xffff8000u;
+        c.x[1] = 0;
+        if (modern) {
+            c.x[2] = mark_fn;
+            c.x[3] = init_fn;
+            c.x[4] = fini_fn;
+        } else {
+            c.x[2] = init_fn;
+            c.x[3] = fini_fn;
+            c.x[4] = 0;
+        }
+        call_guest(&c, start);
+    }
+#else
     printf("\n[phase 1] nninitStartup\n");
     trace_printf("=== phase 1: nninitStartup\n");
     call_guest(&c, NNINIT_STARTUP);
 
-#ifdef SCARLET_RECOMP
-    printf("[phase 2] Scarlet static module initialization\n");
-    trace_printf("=== phase 2: Scarlet sdk/subsdk0/main initialization\n");
-    scarlet_init_all_static_modules(&c);
-#else
     int count = (int)(INIT_ARRAY_SIZE / 8);
     printf("[phase 2] %d static constructors\n", count);
     trace_printf("=== phase 2: static constructors\n");
@@ -352,12 +396,12 @@ static DWORD WINAPI guest_main(LPVOID arg) {
         trace_printf("--- constructor %d at %llx\n", i, (unsigned long long)fn);
         call_guest(&c, fn);
     }
-#endif
 
     { void debug_mode_init(void); debug_mode_init(); }       /* debug_mode.c: test-only fast mode, nothing without SSBU_* variables */
     printf("[phase 3] nnMain\n");
     trace_printf("=== phase 3: nnMain\n");
     call_guest(&c, NN_MAIN);
+#endif
     { void clib_run_atexit(Ctx *c); clib_run_atexit(&c); }   /* clib.c: functions registered with atexit, as a normal exit does */
 
     printf("\nnnMain returned.\n");
