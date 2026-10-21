@@ -88,8 +88,9 @@ def run(cmd, env=None):
 def refresh_missing(build, dump, jobs):
     targets = read_targets(build)
     dirty = []
-    expected_rev = getattr(profile, "LIFT_ABI_REV", "")
     for module, addrs in targets.items():
+        expected_rev = getattr(profile, "LIFT_ABI_REV_BY_MODULE", {}).get(
+            module, getattr(profile, "LIFT_ABI_REV", ""))
         rev_ok = True
         if expected_rev:
             try:
