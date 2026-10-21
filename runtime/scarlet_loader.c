@@ -242,6 +242,28 @@ const ScarletStaticModule *scarlet_module_for_address(uint64_t addr) {
     return NULL;
 }
 
+const char *scarlet_symbolize_static_address(uint64_t addr, uint64_t *sym_addr) {
+    ScarletStaticModule *m = NULL;
+    for (int i = 0; i < SCARLET_STATIC_MODULE_COUNT; i++) {
+        ScarletStaticModule *q = &g_scarlet_static_modules[i];
+        if (addr >= q->base && addr < q->base + q->size) { m = q; break; }
+    }
+    if (!m) return NULL;
+
+    uint64_t off = addr - m->base, best_value = 0;
+    const char *best = NULL;
+    for (uint64_t i = 1; i < m->nsyms; i++) {
+        Elf64Sym *s = module_sym(m, i);
+        if (!s || !s->shndx || !s->name || s->value > off) continue;
+        if (!best || s->value >= best_value) {
+            best_value = s->value;
+            best = module_sym_name(m, s);
+        }
+    }
+    if (best && sym_addr) *sym_addr = m->base + best_value;
+    return best;
+}
+
 static int main_host_override(const char *name) {
     static const char *const names[] = {
         "_ZN2nn2os16GetCurrentThreadEv",
