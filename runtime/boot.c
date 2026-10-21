@@ -565,12 +565,16 @@ int main(int argc, char **argv) {
     /* track V: `--prepare-shaders [folder]` translates every stage of the shader containers in the folder (default
      * ..\cache\vk_containers, filled by tools_vk/bnsh_extract.py) into ..\cache\vk; no game, no window, no GPU (nvn_vk_m4.c) */
     if (argc > 1 && !strcmp(argv[1], "--prepare-shaders")) { int nvn_vk_prepare_shaders(const char *); return nvn_vk_prepare_shaders(argc > 2 ? argv[2] : NULL); }
-    /* data symbols the game imports from the SDK module get their real values (see gen_sdkdata.py) */
+#ifndef SCARLET_RECOMP
+    /* SSBU's partial SDK lift needs host-side copies of imported SDK objects.
+     * Scarlet maps the complete sdk.elf at 0x7006000000 and the static loader
+     * resolves main's data relocations directly to those guest objects. */
     for (int i = 0; i < sdk_data_count; i++) {
         void *copy = _aligned_malloc(sdk_data[i].size, 16);
         memcpy(copy, sdk_data[i].bytes, sdk_data[i].size);
         import_set_address(sdk_data[i].name, copy);
     }
+#endif
     cxxrt_install_data();
     check_romfs();
     runtime_init(g_elf, getenv("SSBU_TRACE") ? getenv("SSBU_TRACE") : "boot_trace.txt");
