@@ -71,6 +71,13 @@ int main(void) {
     ctx.x[0] = registrar; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = ectx; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
 
+    uint32_t pctl = service(sm, "pctl");
+    cmif(4, 0); send_request(pctl); uint32_t pctl_control = msg[3]; assert(pctl_control);
+    cmif(4, 1031); send_request(pctl_control); assert((msg[8] & 0xffu) == 0);
+    cmif(4, 1032); send_request(pctl_control); assert(msg[8] == 0);
+    ctx.x[0] = pctl_control; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
+    ctx.x[0] = pctl; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
+
     uint32_t apm = service(sm, "apm");
     cmif(4, 0); send_request(apm); uint32_t apm_session = msg[3];
     cmif(4, 0); msg[1] = 10; msg[8] = 1; msg[9] = 0x92220008; send_request(apm_session);
@@ -93,6 +100,6 @@ int main(void) {
     ctx.x[0] = e; scarlet_ipc_svc(&ctx, 0x16); assert(ctx.x[0] == 0);
     ctx.x[1] = (uintptr_t)&e; ctx.x[2] = 1; ctx.x[3] = 0;
     scarlet_ipc_svc(&ctx, 0x18); assert(ctx.x[0] == R_INVALID_HANDLE);
-    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, ECTX, APM, close and event SVC tests passed");
+    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, ECTX, PCTL, APM, close and event SVC tests passed");
     return 0;
 }
