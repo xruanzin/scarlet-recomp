@@ -1023,6 +1023,20 @@ def step_lift(cx):
                    if not os.path.isfile(os.path.join(probe_root, m, 'table.c'))]
         if missing:
             raise Fail('--reuse-probe-lift requested but build\\lift is missing: ' + ', '.join(missing))
+        stale = []
+        for module in profile.STATIC_MODULES:
+            late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+            if not late:
+                continue
+            table_path = os.path.join(probe_root, module, 'table.c')
+            with open(table_path, encoding='latin-1') as tf:
+                table_text = tf.read().lower()
+            for addr in late:
+                needle = '{ 0x%xull,' % addr
+                if needle not in table_text:
+                    stale.append('%s:%#x' % (module, addr))
+        if stale:
+            raise Fail('--reuse-probe-lift refused stale build\\lift; relift these late targets first: ' + ', '.join(stale))
         combined = os.path.join(cx.work, 'gen_eh_o2')
         # Refuse to combine a stale probe lift when the profile names a
         # boot-discovered indirect target that is absent from its module table.
