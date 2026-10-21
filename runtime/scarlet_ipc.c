@@ -205,6 +205,11 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             else if (!strcmp(name, "appletOE")) moved = new_session(SERVICE_APPLET);
             else if (!strcmp(name, "aoc:u")) moved = new_session(SERVICE_AOC);
             else if (!strcmp(name, "ectx:aw")) moved = new_session(SERVICE_ECTX_AW);
+            else if (!strcmp(name, "fsp-srv")) moved = new_session(SERVICE_FSP);
+            else if (!strcmp(name, "time:u") || !strcmp(name, "time:a") || !strcmp(name, "time:s"))
+                moved = new_session(SERVICE_TIME);
+            else if (!strcmp(name, "hid")) moved = new_session(SERVICE_HID);
+            else if (!strcmp(name, "hid:sys")) moved = new_session(SERVICE_HID_SYS);
             else if (!strcmp(name, "pctl") || !strcmp(name, "pctl:a") ||
                      !strcmp(name, "pctl:r") || !strcmp(name, "pctl:s"))
                 moved = new_session(SERVICE_PCTL);
@@ -349,6 +354,85 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             out_ptr = out_data;
             data_size = 0x10;
             trace_printf("Scarlet pctl cmd %u -> unrestricted/16-byte zero payload\n", cmd);
+        } else if (service == SERVICE_FSP) {
+            /* Proven Scarlet bootstrap contract from scarlet_pc. The early
+             * startup path only needs SetCurrentProcess plus CMIF control
+             * messages before rtld_init; keep the other harmless bootstrap
+             * controls ready so we do not stop one command later. */
+            if (cmd == 1 || cmd == 22 || cmd == 1003 || cmd == 1004 || cmd == 1006) {
+                /* success, no payload */
+            } else if (cmd == 1005) {
+                value = 0; data_size = 4; /* GetGlobalAccessLogMode */
+            } else if (cmd == 1011) {
+                memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
+            } else {
+                goto unsupported;
+            }
+        } else if (service == SERVICE_TIME) {
+            switch (cmd) {
+            case 0: case 1: case 4: case 5:
+                moved = new_session(SERVICE_TIME_SYSTEM); break;
+            case 2:
+                moved = new_session(SERVICE_TIME_STEADY); break;
+            case 3:
+                moved = new_session(SERVICE_TIME_TZ); break;
+            case 20:
+                copied = scarlet_time_sharedmem();
+                if (!copied) result = 0xd201;
+                break;
+            case 100: case 101:
+                out_data[0] = 0; out_ptr = out_data; data_size = 1; break;
+            default:
+                memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10; break;
+            }
+        } else if (service == SERVICE_TIME_SYSTEM) {
+            if (cmd == 0) {
+                int64_t now = scarlet_unix_now();
+                memcpy(out_data, &now, 8); out_ptr = out_data; data_size = 8;
+            } else if (cmd == 2) {
+                scarlet_write_clock_context(out_data); out_ptr = out_data; data_size = 0x20;
+            } else goto unsupported;
+        } else if (service == SERVICE_TIME_STEADY) {
+            if (cmd == 0) {
+                int64_t now = scarlet_steady_seconds();
+                memcpy(out_data, &now, 8);
+                memcpy(out_data + 8, scarlet_clock_uuid, 16);
+                out_ptr = out_data; data_size = 0x18;
+            } else {
+                value = 0; data_size = 8;
+            }
+        } else if (service == SERVICE_TIME_TZ) {
+            if (cmd == 0) {
+                memcpy(out_data, "UTC", 4); out_ptr = out_data; data_size = 0x24;
+            } else {
+                memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
+            }
+        } else if (service == SERVICE_HID && cmd == 0) {
+            moved = new_session(SERVICE_HID_APPLET);
+            if (!moved) result = 0xd201;
+        } else if (service == SERVICE_HID_APPLET && cmd == 0) {
+            copied = scarlet_hid_sharedmem();
+            if (!copied) result = 0xd201;
+        } else if (service == SERVICE_HID && (cmd == 40 || cmd == 106)) {
+            HANDLE ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+            copied = copy_event(ev);
+            if (ev) CloseHandle(ev);
+            if (!copied) result = 0xd201;
+        } else if (service == SERVICE_HID && cmd == 100) {
+            if (input_size >= 4) hid_supported_styles = data[0];
+        } else if (service == SERVICE_HID && cmd == 101) {
+            value = hid_supported_styles; data_size = 4;
+        } else if (service == SERVICE_HID && (cmd == 121 || cmd == 129)) {
+            value = 0; data_size = 8;
+        } else if (service == SERVICE_HID && cmd == 200) {
+            memset(out_data, 0, 0x10);
+            *(uint32_t *)out_data = 1;
+            out_ptr = out_data; data_size = 0x10;
+        } else if (service == SERVICE_HID) {
+            /* Activate*/Set*/vibration commands are no-ops on a host with
+             * input bridged outside Horizon HID, matching scarlet_pc. */
+        } else if (service == SERVICE_HID_SYS) {
+            memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
