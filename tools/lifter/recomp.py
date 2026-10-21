@@ -701,6 +701,7 @@ class Fn:
                 if double:
                     return struct.unpack('<Q', struct.pack('<d', value))[0]
                 return struct.unpack('<I', struct.pack('<f', value))[0] * 0x100000001
+            merge = None
             if cmode == 15:
                 val = vfp(op == 1)
             elif cmode == 14 and op == 1:
@@ -717,8 +718,21 @@ class Fn:
                 if op:
                     v16 ^= 0xffff
                 val = v16 * 0x0001000100010001
+            elif cmode in (1, 3, 5, 7):
+                v32 = imm8 << (8 * (cmode >> 1))
+                val = v32 * 0x100000001
+                merge = 'bic' if op else 'orr'
+            elif cmode in (9, 11):
+                v16 = imm8 << (8 * ((cmode >> 1) & 1))
+                val = v16 * 0x0001000100010001
+                merge = 'bic' if op else 'orr'
             else:
                 raise Unimpl('simd-imm')
+            if merge:
+                expr = 'c->v[%d].d[%%d] %s 0x%xULL' % (rd, '& ~' if merge == 'bic' else '|', val)
+                body = 'c->v[%d].d[0] = %s; ' % (rd, expr % 0)
+                body += 'c->v[%d].d[1] = %s;' % (rd, (expr % 1) if q else '0')
+                return '{ ' + body + ' }'
             return '{ c->v[%d].d[0] = 0x%xULL; c->v[%d].d[1] = %s; }' % (rd, val, rd, ('0x%xULL' % val) if q else '0')
         if (w & 0xbfe0fc00) == 0x0ea01c00 and rn == rm:  # mov vD.16b, vN.16b (orr)
             q = bits(w, 30, 30)
@@ -754,9 +768,11 @@ class Fn:
                     op = {(0, 0, 0x1a): 'F_ADD', (0, 1, 0x1a): 'F_SUB', (1, 0, 0x1b): 'F_MUL', (1, 0, 0x1f): 'F_DIV',
                           (0, 0, 0x19): 'F_MLA', (0, 1, 0x19): 'F_MLS', (0, 0, 0x1e): 'F_MAX', (0, 1, 0x1e): 'F_MIN',
                           (0, 0, 0x18): 'F_MAXNM', (0, 1, 0x18): 'F_MINNM', (1, 0, 0x1a): 'F_ADDP', (1, 1, 0x1a): 'F_ABD',
+                          (1, 0, 0x1e): 'F_MAXP', (1, 1, 0x1e): 'F_MINP',
+                          (1, 0, 0x18): 'F_MAXNMP', (1, 1, 0x18): 'F_MINNMP',
                           (0, 0, 0x1c): 'F_CMEQ', (1, 0, 0x1c): 'F_CMGE', (1, 1, 0x1c): 'F_CMGT',
                           (0, 0, 0x1f): 'F_RECPS', (0, 1, 0x1f): 'F_RSQRTS'}.get((u, a, opc))
-                    if op is None or (op == 'F_ADDP' and scalar):
+                    if op is None or (op in ('F_ADDP', 'F_MAXP', 'F_MINP', 'F_MAXNMP', 'F_MINNMP') and scalar):
                         raise Unimpl('simd-f3')
                     return 'v_f3v(%s, %s, %s, %s, %d, %d);' % (V(rd), V(rn), V(rm), op, sz, fcount())
                 if opc == 3 and u and size:
