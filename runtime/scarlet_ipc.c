@@ -23,12 +23,14 @@ static HANDLE events[SESSION_COUNT];
 static HANDLE applet_message_event;
 static HANDLE suspended_tick_event;
 static HANDLE gpu_error_event, friend_invitation_event;
+static HANDLE aoc_changed_event;
 static int focus_message_pending = 1;
 static int request_exit_on_next_program;
 static unsigned char self_settings[32];
 enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESSION,
        SERVICE_APPLET, SERVICE_PROXY, SERVICE_COMMON, SERVICE_SELF, SERVICE_WINDOW,
-       SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG };
+       SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
+       SERVICE_AOC };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 
 static uint32_t new_session(unsigned char service) {
@@ -140,6 +142,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             if (!strcmp(name, "lm")) moved = new_session(SERVICE_LM);
             else if (!strcmp(name, "apm")) moved = new_session(SERVICE_APM);
             else if (!strcmp(name, "appletOE")) moved = new_session(SERVICE_APPLET);
+            else if (!strcmp(name, "aoc:u")) moved = new_session(SERVICE_AOC);
             else {
                 printf("Scarlet SM GetService '%s' is not implemented\n", name);
                 goto unsupported;
@@ -200,6 +203,26 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             value = 1; data_size = 4; /* docked, boost, foreground */
         } else if (service == SERVICE_COMMON && cmd == 8) {
             value = 0; data_size = 4; /* normal boot */
+        } else if (service == SERVICE_AOC && (cmd == 0 || cmd == 2)) {
+            /* CountAddOnContent[ByApplicationId]. The baseline dump has no DLC
+             * mounted, so the installed add-on-content count is zero. */
+            value = 0; data_size = 4;
+        } else if (service == SERVICE_AOC && (cmd == 1 || cmd == 3)) {
+            /* ListAddOnContent[ByApplicationId]. With a zero installed count,
+             * no output-buffer entries are written; return out_count=0. */
+            value = 0; data_size = 4;
+        } else if (service == SERVICE_AOC && (cmd == 4 || cmd == 5)) {
+            /* GetAddOnContentBaseId[ByApplicationId]. Scarlet's application
+             * id is 0100A3D008C5C000 and its AOC base is application+0x1000. */
+            value = 0x0100A3D008C5D000ULL; data_size = 8;
+        } else if (service == SERVICE_AOC && (cmd == 8 || cmd == 10)) {
+            /* DLC list-change event. There is no host DLC installer yet, so
+             * keep a stable manual-reset event permanently unsignaled. */
+            if (!aoc_changed_event) aoc_changed_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+            copied = copy_event(aoc_changed_event);
+            if (!copied) result = 0xd201;
+        } else if (service == SERVICE_AOC && cmd == 9) {
+            value = 0; data_size = 4; /* no lost add-on-content error */
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
