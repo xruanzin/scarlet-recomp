@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include "../runtime/scarlet_ipc.c"
 void trace_printf(const char *fmt, ...) { (void)fmt; }
+uint64_t guest_tpidrro(Ctx *c) { return c->tpidr; } /* test harness: msg[] is the TLR */
 void guest_trap(const char *what, uint64_t addr) {
     fprintf(stderr, "unexpected trap %s %llu\n", what, (unsigned long long)addr);
     abort();
@@ -73,7 +74,9 @@ int main(void) {
 
     uint32_t pctl = service(sm, "pctl");
     cmif(4, 0); send_request(pctl); uint32_t pctl_control = msg[3]; assert(pctl_control);
-    cmif(4, 1031); send_request(pctl_control); assert((msg[8] & 0xffu) == 0);
+    cmif(4, 1031); send_request(pctl_control);
+    assert((msg[1] & 0x3ffu) == 9); /* 4 SFCO words + ceil(1 byte/4) + 4 alignment */
+    assert(msg[4] == 0x4f434653 && msg[6] == 0 && (msg[8] & 0xffu) == 0);
     cmif(4, 1032); send_request(pctl_control); assert(msg[8] == 0);
     cmif(4, 999); send_request(pctl_control);
     for (int i = 0; i < 4; ++i) assert(msg[8 + i] == 0);
@@ -90,7 +93,8 @@ int main(void) {
     cmif(4, 23); send_request(appfn);
     assert(msg[6] == 0 && !memcmp(&msg[8], "1.0.0", 5));
     cmif(4, 40); send_request(appfn);
-    assert(msg[6] == 0 && (msg[8] & 0xffu) == 0);
+    assert((msg[1] & 0x3ffu) == 9);
+    assert(msg[4] == 0x4f434653 && msg[6] == 0 && (msg[8] & 0xffu) == 0);
     ctx.x[0] = appfn; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = proxy; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = applet; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
@@ -117,6 +121,6 @@ int main(void) {
     ctx.x[0] = e; scarlet_ipc_svc(&ctx, 0x16); assert(ctx.x[0] == 0);
     ctx.x[1] = (uintptr_t)&e; ctx.x[2] = 1; ctx.x[3] = 0;
     scarlet_ipc_svc(&ctx, 0x18); assert(ctx.x[0] == R_INVALID_HANDLE);
-    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, ECTX, PCTL, application, APM, close and event SVC tests passed");
+    puts("Scarlet IPC: TIPC/CMIF byte rounding, alignment, domains, AOC, ECTX, PCTL, application, APM and events passed");
     return 0;
 }
