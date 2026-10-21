@@ -47,6 +47,8 @@ if SCARLET:
 # Everything of the host that is derived from the dump is linked into the game DLL instead (game_data.h): the exe is made
 # of the runtime's own sources only and can be built without a dump (scripts/make_release.py).
 GAME_DATA_SOURCES = ['game_data.c', 'sdkdata.c', 'nro_registry.c', 'sdklift_gen.c']
+if SCARLET:
+    GAME_DATA_SOURCES.append('neon_crypto.c')
 # RECOMP_NOCRT=1: the game DLL and the module DLLs are compiled and linked with LLVM alone, without the MSVC Build Tools or
 # the Windows SDK. The few C-library headers the lifted code includes come from nocrt\ (the same declarations as the
 # Universal CRT's), the few functions it calls from ucrtbase.dll and ntdll.dll, which every Windows 10 / 11 has (import
