@@ -455,27 +455,47 @@ class Fn:
                     total = nb * nstruct
             else:
                 opcode, s_bit = bits(w, 15, 13), bits(w, 12, 12)
-                if bits(w, 21, 21):
-                    raise Unimpl('ldN')
-                if opcode == 6 and load:
-                    body = 'v_dup(&c->v[%d], rd%d(a), %d, %d);' % (rt, 8 << size, size, (16 if q else 8) >> size)
-                    total = 1 << size
+                r_bit = bits(w, 21, 21)
+                if opcode in (6, 7):                       # LD1R..LD4R: replicate one element per structure register
+                    if not load:
+                        raise Unimpl('ldN')
+                    nstruct = (1 if opcode == 6 else 3) + r_bit
+                    es = size
+                    if es == 3 and not q:
+                        raise Unimpl('ldN')
+                    parts = []
+                    for k in range(nstruct):
+                        parts.append('v_dup(&c->v[%d], rd%d(a + %d), %d, %d);' %
+                                     ((rt + k) & 31, 8 << es, k * (1 << es), es, (16 if q else 8) >> es))
+                    body = ' '.join(parts)
+                    total = (1 << es) * nstruct
                 else:
-                    if opcode == 0:
+                    # Single element LD1..LD4/ST1..ST4. opcode chooses both
+                    # element size class and 1/3-register base count; R adds
+                    # one, giving the 2/4-register forms used heavily by Scarlet.
+                    if opcode in (0, 1):
                         es, idx = 0, (q << 3) | (s_bit << 2) | size
-                    elif opcode == 2:
+                    elif opcode in (2, 3):
                         es, idx = 1, (q << 2) | (s_bit << 1) | (size >> 1)
-                    elif opcode == 4 and size == 0:
+                    elif opcode in (4, 5) and size == 0:
                         es, idx = 2, (q << 1) | s_bit
-                    elif opcode == 4 and size == 1:
+                    elif opcode in (4, 5) and size == 1:
                         es, idx = 3, q
                     else:
                         raise Unimpl('ldN')
-                    if load:
-                        body = 'vset(&c->v[%d], %d, %d, rd%d(a));' % (rt, es, idx, 8 << es)
-                    else:
-                        body = 'wr%d(a, vget(&c->v[%d], %d, %d));' % (8 << es, rt, es, idx)
-                    total = 1 << es
+                    nstruct = (1 if (opcode & 1) == 0 else 3) + r_bit
+                    parts = []
+                    for k in range(nstruct):
+                        off = k * (1 << es)
+                        vr = (rt + k) & 31
+                        if load:
+                            parts.append('vset(&c->v[%d], %d, %d, rd%d(a + %d));' %
+                                         (vr, es, idx, 8 << es, off))
+                        else:
+                            parts.append('wr%d(a + %d, vget(&c->v[%d], %d, %d));' %
+                                         (8 << es, off, vr, es, idx))
+                    body = ' '.join(parts)
+                    total = (1 << es) * nstruct
             wb = ''
             if post:
                 wb = '%s += %s;' % (XS(rn), ('%dULL' % total) if rm == 31 else X(rm))
