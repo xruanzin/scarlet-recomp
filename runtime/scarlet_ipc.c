@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "hostrt.h"
 HANDLE scarlet_thread_wait_handle(uint32_t h);
 
@@ -30,8 +31,43 @@ static unsigned char self_settings[32];
 enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESSION,
        SERVICE_APPLET, SERVICE_PROXY, SERVICE_COMMON, SERVICE_SELF, SERVICE_WINDOW,
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
-       SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL };
+       SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL,
+       SERVICE_FSP, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
+       SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
+static const unsigned char scarlet_clock_uuid[16] =
+    {0x4c,0x41,0x52,0x65,0x63,0x6f,0x6d,0x70,1,2,3,4,5,6,7,8};
+static uint32_t time_shmem_handle, hid_shmem_handle;
+static uint32_t hid_supported_styles = 0x1f;
+
+static int64_t scarlet_steady_seconds(void) {
+    extern uint64_t guest_cntpct(void);
+    return (int64_t)(guest_cntpct() / 19200000ULL);
+}
+static int64_t scarlet_unix_now(void) { return (int64_t)time(NULL); }
+static void scarlet_write_clock_context(unsigned char *p) {
+    int64_t steady = scarlet_steady_seconds();
+    int64_t off = scarlet_unix_now() - steady;
+    memcpy(p, &off, 8);
+    memcpy(p + 8, &steady, 8);
+    memcpy(p + 0x10, scarlet_clock_uuid, 16);
+}
+static uint32_t scarlet_time_sharedmem(void) {
+    if (time_shmem_handle) return time_shmem_handle;
+    unsigned char block[0x1000] = {0};
+    memcpy(block + 0x10, scarlet_clock_uuid, 16);
+    scarlet_write_clock_context(block + 0x40);
+    scarlet_write_clock_context(block + 0x88);
+    extern uint32_t scarlet_sharedmem_create(uint64_t, const void *, size_t);
+    time_shmem_handle = scarlet_sharedmem_create(sizeof block, block, sizeof block);
+    return time_shmem_handle;
+}
+static uint32_t scarlet_hid_sharedmem(void) {
+    if (hid_shmem_handle) return hid_shmem_handle;
+    extern uint32_t scarlet_sharedmem_create(uint64_t, const void *, size_t);
+    hid_shmem_handle = scarlet_sharedmem_create(0x40000, NULL, 0);
+    return hid_shmem_handle;
+}
 static volatile uint32_t g_scarlet_terminate_result;
 uint32_t scarlet_last_terminate_result(void) { return g_scarlet_terminate_result; }
 
