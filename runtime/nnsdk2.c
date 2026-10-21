@@ -37,7 +37,9 @@ void libc2_install_musl_stdio(void);
 void nnnet_register_final(void);
 
 #define P(v) ((uint64_t)(uintptr_t)(v))
+#ifndef SCARLET_RECOMP
 #include "sdktest_data.h"
+#endif
 
 static ImportFn handler(const char *name) {
     ImportFn f = import_lookup(name);
@@ -45,6 +47,7 @@ static ImportFn handler(const char *name) {
     return f;
 }
 
+#ifndef SCARLET_RECOMP
 /* ---- nn::util::DecompressZlib(void *dst, size_t dstSize, const void *src, size_t srcSize, void *work, size_t workSize) -> bool */
 static int zlib_selftest(Ctx *c) {
     ImportFn f = handler("_ZN2nn4util14DecompressZlibEPvmPKvmS1_m");
@@ -185,6 +188,10 @@ static int jpeg_selftest(Ctx *c) {
     }
     return bad;
 }
+#else
+static int zlib_selftest(Ctx *c) { (void)c; return 0; }
+static int jpeg_selftest(Ctx *c) { (void)c; return 0; }
+#endif /* !SCARLET_RECOMP: SSBU zlib/JPEG reference-vector tests */
 
 /* SSBU_DUMP_UNREG2 */
 static void dump_unregistered(void) {
