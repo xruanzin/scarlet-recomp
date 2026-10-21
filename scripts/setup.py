@@ -1040,6 +1040,9 @@ def step_lift(cx):
         env = cx.env(RECOMP_MODULE=module,
                      RECOMP_BASE=hex(profile.MODULE_BASES[module]),
                      RECOMP_MODULE_MAP=module_map)
+        late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+        if late:
+            env['RECOMP_EXTRA_STARTS'] = ','.join(hex(x) for x in late)
         cx.run('lift', [sys.executable, 'recomp_eh.py', outdir, str(cx.lift_jobs)],
                env=env, log='lift_' + module)
         n = len([name for name in os.listdir(outdir)
