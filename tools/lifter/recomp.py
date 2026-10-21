@@ -226,6 +226,13 @@ class Fn:
             return self.dp_reg(w, pc)
         if op0 in (7, 15):
             return self.fpsimd(w, pc)
+        # op0 0..3 are unallocated for the ARMv8.0-A ISA implemented by the
+        # Switch's Cortex-A57. Modern disassemblers may assign some of this
+        # space to later SVE/SME extensions, but those instructions do not
+        # exist on the target CPU. Preserve architectural behaviour: if such a
+        # word is ever executed, take the undefined-instruction path.
+        if op0 in (0, 1, 2, 3):
+            return 'guest_trap("undefined instruction", 0x%xULL);' % pc
         raise Unimpl('class%d' % op0)
 
     # ---- data processing, immediate
