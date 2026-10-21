@@ -207,12 +207,10 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             out_ptr = out_data;
             data_size = 0x10;
         } else if (service == SERVICE_APPLICATION && cmd == 40) {
-            /* NotifyRunning -> bool/u8 restart requested. False for normal boot.
-             * Responses are word-aligned on the wire, but only the first byte
-             * belongs to the value. */
+            /* NotifyRunning -> bool/u8 restart requested. */
             out_data[0] = 0;
             out_ptr = out_data;
-            data_size = 4;
+            data_size = 1;
         } else if (service == SERVICE_COMMON && cmd == 900) {
             request_exit_on_next_program = 1;
         } else if (service == SERVICE_COMMON && cmd == 0) {
@@ -326,19 +324,31 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             trace_printf("Scarlet ILogger destination=%x (host trace)\n", data[0]);
         } else goto unsupported;
     } else goto unsupported;
-    /* TIPC has no CMIF magic or 16-byte alignment; result is the first raw word.
-     * See switchbrew/libnx nx/include/switch/sf/tipc.h. */
+    const size_t data_words = (data_size + 3) / 4;
+    const int has_handles = moved || copied;
+
+    /* TIPC has no CMIF magic or 16-byte alignment. Its raw response is
+     * Result followed immediately by service output. Round byte-sized outputs
+     * up to whole HIPC words exactly as libnx/scarlet_pc does. */
     if (tipc) {
-        size_t pos = (moved || copied) ? 4 : 2;
-        if (size < (pos + 1 + data_size / 4) * 4) return R_INVALID_SIZE;
-        memset(msg, 0, (pos + 1 + data_size / 4) * 4);
-        msg[1] = 1 + (uint32_t)(data_size / 4);
-        if (moved) { msg[1] |= 0x80000000u; msg[2] = 1u << 5; msg[3] = moved; }
-        if (copied) { msg[1] |= 0x80000000u; msg[2] = 1u << 1; msg[3] = copied; }
-        msg[pos] = result;
-        if (data_size) memcpy(msg + pos + 1, out_ptr, data_size);
+        size_t handle_words = has_handles ? 1 + (copied ? 1 : 0) + (moved ? 1 : 0) : 0;
+        size_t total_words = 2 + handle_words + 1 + data_words;
+        if (size < total_words * 4) return R_INVALID_SIZE;
+        memset(msg, 0, total_words * 4);
+        uint32_t *q = msg + 2;
+        msg[0] = type;
+        msg[1] = 1 + (uint32_t)data_words;
+        if (has_handles) {
+            msg[1] |= 0x80000000u;
+            *q++ = (copied ? (1u << 1) : 0) | (moved ? (1u << 5) : 0);
+            if (copied) *q++ = copied;
+            if (moved) *q++ = moved;
+        }
+        q[0] = result;
+        if (data_size) memcpy(q + 1, out_ptr, data_size);
         return 0;
     }
+
     uint32_t domain_out = 0;
     if (domain_request && moved) {
         unsigned id = 1;
@@ -347,18 +357,47 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
         else { domain->objects[id] = get_session(moved); domain_out = id; }
         close_session(moved); moved = 0;
     }
-    /* Four words of total HIPC padding plus SFCO and optional output. */
-    size_t out_off = 4;
-    size_t response_words = 8 + data_size / 4 + (domain_request ? 4 : 0) + (domain_out ? 1 : 0);
-    if (size < (response_words + 2) * 4) return R_INVALID_SIZE;
-    memset(msg, 0, (response_words + 2) * 4);
-    msg[1] = (uint32_t)response_words;
-    if (moved) { msg[1] |= 0x80000000u; msg[2] = 1u << 5; msg[3] = moved; }
-    if (copied) { msg[1] |= 0x80000000u; msg[2] = 1u << 1; msg[3] = copied; }
-    if (domain_request) { msg[out_off] = domain_out ? 1 : 0; out_off += 4; }
-    msg[out_off] = 0x4f434653; msg[out_off + 2] = result;
-    if (data_size) memcpy(msg + out_off + 4, out_ptr, data_size);
-    if (domain_out) msg[out_off + 4 + data_size / 4] = domain_out;
+
+    /* CMIF response layout proven by scarlet_pc:
+     *   HIPC header
+     *   optional special-header + copy/move handles
+     *   16-byte alignment
+     *   optional 16-byte domain response header
+     *   SFCO, padding, Result, padding, service data, domain object ids
+     *
+     * Do not assume SFCO lives at msg[4]: with enough returned handles the
+     * aligned raw section moves forward. */
+    const int cmif_handles = moved || copied;
+    size_t handle_words = cmif_handles ? 1 + (copied ? 1 : 0) + (moved ? 1 : 0) : 0;
+    uint32_t *q0 = msg + 2 + handle_words;
+    uint32_t *aligned_out = (uint32_t *)(((uintptr_t)q0 + 15) & ~(uintptr_t)15);
+    size_t domain_words = domain_request ? 4 + (domain_out ? 1 : 0) : 0;
+    uint32_t *end = aligned_out + domain_words + 4 + data_words;
+    if ((uintptr_t)end > (uintptr_t)msg + size) return R_INVALID_SIZE;
+
+    size_t payload_words = 4 + data_words + domain_words;
+    size_t raw_words = payload_words + 4; /* conservative alignment padding, as scarlet_pc */
+    memset(msg, 0, (size_t)(end - msg) * 4);
+    msg[0] = 0;
+    msg[1] = (uint32_t)raw_words | (cmif_handles ? 0x80000000u : 0);
+
+    uint32_t *q = msg + 2;
+    if (cmif_handles) {
+        *q++ = (copied ? (1u << 1) : 0) | (moved ? (1u << 5) : 0);
+        if (copied) *q++ = copied;
+        if (moved) *q++ = moved;
+    }
+    uint32_t *out = (uint32_t *)(((uintptr_t)q + 15) & ~(uintptr_t)15);
+    if (domain_request) {
+        out[0] = domain_out ? 1 : 0;
+        out += 4;
+    }
+    out[0] = 0x4f434653; /* SFCO */
+    out[1] = 0;
+    out[2] = result;
+    out[3] = 0;
+    if (data_size) memcpy(out + 4, out_ptr, data_size);
+    if (domain_out) out[4 + data_words] = domain_out;
     return 0;
 unsupported:
     printf("Scarlet IPC unsupported: handle=%x service=%u type=%u cmd=%u guest=%llx\n",
