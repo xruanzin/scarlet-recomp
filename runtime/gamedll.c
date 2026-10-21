@@ -20,6 +20,7 @@ typedef struct {
     int (*site_midhook)(Ctx *, uint64_t);
     uint64_t (*guest_cntpct)(void);             /* Scarlet generic physical timer */
     uint64_t (*guest_tpidrro)(Ctx *);           /* Scarlet TPIDRRO_EL0 / TLR */
+    void (*scarlet_stdalloc)(Ctx *, int);       /* Scarlet host-backed StandardAllocator */
 } GameHost;
 
 typedef struct {
@@ -45,6 +46,7 @@ void *sdk_longjmp_target(Ctx *c);
 void sky_site_inline(Ctx *c, uint64_t addr);
 int sky_site_midhook(Ctx *c, uint64_t addr);
 uint64_t guest_tpidrro(Ctx *c);
+void scarlet_stdalloc_dispatch(Ctx *c, int op);
 
 #undef fn_table
 #undef fn_table_count
@@ -57,7 +59,8 @@ const int *game_dyn_sym_count_p;
 
 __attribute__((constructor)) static void bind_game(void) {
     GameHost h = {call_indirect, host_import, guest_trap, guest_unimpl, guest_svc, stx_diag,
-                  sky_site_inline, sky_site_midhook, guest_cntpct, guest_tpidrro};
+                  sky_site_inline, sky_site_midhook, guest_cntpct, guest_tpidrro,
+                  scarlet_stdalloc_dispatch};
     GameTables t;
     game_bind(&h, &t);
     game_fn_table_p = (const FnEntry (*)[])t.table;
