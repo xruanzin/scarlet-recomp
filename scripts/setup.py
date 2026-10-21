@@ -1024,9 +1024,34 @@ def step_lift(cx):
         if missing:
             raise Fail('--reuse-probe-lift requested but build\\lift is missing: ' + ', '.join(missing))
         combined = os.path.join(cx.work, 'gen_eh_o2')
+        # Refuse to combine a stale probe lift when the profile names a
+        # boot-discovered indirect target that is absent from its module table.
+        for module in profile.STATIC_MODULES:
+            late = getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ())
+            if not late:
+                continue
+            tp = os.path.join(probe_root, module, 'table.c')
+            text = open(tp, encoding='latin-1').read().lower()
+            miss = [x for x in late if ('0x%xull' % x).lower() not in text]
+            if miss:
+                raise Fail('stale build\\lift\\%s: late target(s) missing from table.c: %s; rerun scripts\\scarlet_lift_probe.py --module %s' %
+                           (module, ', '.join(hex(x) for x in miss), module))
+
         cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_combine_lift.py'),
                         '--lift', probe_root, '--out', combined, '--module-map', module_map],
                env=cx.env(), log='combine_lift')
+
+        combined_text = open(os.path.join(combined, 'table.c'), encoding='latin-1').read().lower()
+        missing_combined = []
+        for module in profile.STATIC_MODULES:
+            for x in getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(module, ()):
+                if ('0x%xull' % x).lower() not in combined_text:
+                    missing_combined.append(x)
+        if missing_combined:
+            raise Fail('combined lift lost late target(s): ' + ', '.join(hex(x) for x in missing_combined))
+        if any(getattr(profile, 'LATE_INDIRECT_STARTS', {}).get(m, ()) for m in profile.STATIC_MODULES):
+            say('  Scarlet late indirect target verification: OK')
+
         n = len([name for name in os.listdir(combined) if name.endswith('.c')])
         say('  Scarlet: reused build\\lift probe output -> %d combined C files (%.0f MB)' %
             (n, disk_mb(combined)))
