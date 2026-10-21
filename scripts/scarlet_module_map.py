@@ -144,14 +144,29 @@ def build_map(bin_dir):
         unresolved[name] = sorted(set(u))
         ambiguous[name] = a
 
+    weak_unresolved = {}
+    strong_unresolved = {}
+    for name, mod in modules.items():
+        imports_by_name = {x["name"]: x for x in mod["imports"]}
+        weak_unresolved[name] = sorted(
+            sym for sym in unresolved[name]
+            if imports_by_name.get(sym, {}).get("bind") == 2
+        )
+        strong_unresolved[name] = sorted(
+            sym for sym in unresolved[name]
+            if imports_by_name.get(sym, {}).get("bind") != 2
+        )
+
     return {
-        "format": 2,
+        "format": 3,
         "game": profile.GAME_NAME,
         "version": profile.BASE_VERSION,
         "main_build_id": profile.MAIN_BUILD_ID,
         "modules": modules,
         "resolutions": resolutions,
         "unresolved": unresolved,
+        "weak_unresolved": weak_unresolved,
+        "strong_unresolved": strong_unresolved,
         "ambiguous": ambiguous,
     }
 
@@ -180,10 +195,16 @@ def main(argv=None):
     print("  map: %s" % os.path.abspath(a.out))
     for name in profile.STATIC_MODULES:
         unresolved = result["unresolved"][name]
+        weak = result["weak_unresolved"][name]
+        strong = result["strong_unresolved"][name]
         ambiguous = result["ambiguous"][name]
-        if unresolved:
-            print("\n  %s unresolved external imports (%d):" % (name, len(unresolved)))
-            for symbol in unresolved:
+        if strong:
+            print("\n  %s STRONG unresolved external imports (%d):" % (name, len(strong)))
+            for symbol in strong:
+                print("    " + symbol)
+        if weak:
+            print("\n  %s unresolved WEAK imports -> NULL when no override exists (%d):" % (name, len(weak)))
+            for symbol in weak:
                 print("    " + symbol)
         ordered = [(symbol, target) for symbol, target in result["resolutions"][name].items()
                    if target.get("resolution") == "module-load-order"]
