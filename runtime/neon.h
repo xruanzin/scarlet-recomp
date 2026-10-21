@@ -212,6 +212,205 @@ static inline void v_xtn(V128 *d, const V128 *pn, int sz) {
     *d = r;
 }
 
+/* Scarlet uses a wider part of Advanced SIMD than SSBU's original
+ * baseline. Keep the extra operations in small element-wise helpers so the
+ * generated game code stays static C and Clang can inline/vectorise it. */
+static inline uint64_t v_umax_bits(int bits) {
+    return bits == 64 ? ~0ull : ((1ull << bits) - 1);
+}
+static inline int64_t v_sat_s(__int128 x, int bits) {
+    __int128 lo = -((__int128)1 << (bits - 1));
+    __int128 hi = ((__int128)1 << (bits - 1)) - 1;
+    if (x < lo) x = lo;
+    if (x > hi) x = hi;
+    return (int64_t)x;
+}
+static inline uint64_t v_sat_u(__int128 x, int bits) {
+    unsigned __int128 hi = bits == 64 ? (unsigned __int128)~0ull :
+                           (((unsigned __int128)1 << bits) - 1);
+    if (x < 0) return 0;
+    if ((unsigned __int128)x > hi) return (uint64_t)hi;
+    return (uint64_t)x;
+}
+
+enum {
+    IX2_SHADD, IX2_UHADD, IX2_SRHADD, IX2_URHADD,
+    IX2_SHSUB, IX2_UHSUB, IX2_SABD, IX2_UABD,
+    IX2_MLA, IX2_MLS,
+    IX2_SQADD, IX2_UQADD, IX2_SQSUB, IX2_UQSUB,
+    IX2_SQDMULH, IX2_SQRDMULH
+};
+
+static inline void v_i3_extra(V128 *d, const V128 *pn, const V128 *pm,
+                              int op, int sz, int n) {
+    V128 a = *pn, b = *pm, old = *d, r;
+    int ebits = 8 << sz;
+    uint64_t mask = v_umax_bits(ebits);
+    r.d[0] = 0; r.d[1] = 0;
+    for (int i = 0; i < n; i++) {
+        uint64_t ux = vget(&a, sz, i), uy = vget(&b, sz, i);
+        int64_t sx = vsext(ux, sz), sy = vsext(uy, sz);
+        __int128 z = 0;
+        switch (op) {
+        case IX2_SHADD:   z = ((__int128)sx + sy) >> 1; break;
+        case IX2_UHADD:   z = ((unsigned __int128)ux + uy) >> 1; break;
+        case IX2_SRHADD:  z = ((__int128)sx + sy + 1) >> 1; break;
+        case IX2_URHADD:  z = ((unsigned __int128)ux + uy + 1) >> 1; break;
+        case IX2_SHSUB:   z = ((__int128)sx - sy) >> 1; break;
+        case IX2_UHSUB:   z = ((__int128)ux - (__int128)uy) >> 1; break;
+        case IX2_SABD:    z = sx >= sy ? (__int128)sx - sy : (__int128)sy - sx; break;
+        case IX2_UABD:    z = ux >= uy ? (unsigned __int128)ux - uy : (unsigned __int128)uy - ux; break;
+        case IX2_MLA:     z = (__int128)vget(&old, sz, i) + (unsigned __int128)ux * uy; break;
+        case IX2_MLS:     z = (__int128)vget(&old, sz, i) - (unsigned __int128)ux * uy; break;
+        case IX2_SQADD:   z = v_sat_s((__int128)sx + sy, ebits); break;
+        case IX2_UQADD:   z = v_sat_u((__int128)(unsigned __int128)ux + uy, ebits); break;
+        case IX2_SQSUB:   z = v_sat_s((__int128)sx - sy, ebits); break;
+        case IX2_UQSUB:   z = v_sat_u((__int128)ux - (__int128)uy, ebits); break;
+        case IX2_SQDMULH:
+        case IX2_SQRDMULH: {
+            __int128 p = (__int128)sx * sy * 2;
+            if (op == IX2_SQRDMULH) p += (__int128)1 << (ebits - 1);
+            z = v_sat_s(p >> ebits, ebits);
+            break;
+        }
+        }
+        vset(&r, sz, i, (uint64_t)z & mask);
+    }
+    *d = r;
+}
+
+enum {
+    VL_ADDL, VL_ADDW, VL_SUBL, VL_SUBW,
+    VL_MLAL, VL_MLSL, VL_MULL, VL_ABDL, VL_ABAL
+};
+
+static inline void v_long3(V128 *d, const V128 *pn, const V128 *pm,
+                           int op, int sz, int is_unsigned, int upper) {
+    V128 a = *pn, b = *pm, old = *d, r;
+    int n = 8 >> sz;
+    r.d[0] = 0; r.d[1] = 0;
+    for (int i = 0; i < n; i++) {
+        int j = i + (upper ? n : 0);
+        uint64_t ax, bx;
+        __int128 x, y, z = 0;
+        if (op == VL_ADDW || op == VL_SUBW) {
+            ax = vget(&a, sz + 1, i);
+            bx = vget(&b, sz, j);
+            x = is_unsigned ? (__int128)(unsigned __int128)ax : (__int128)vsext(ax, sz + 1);
+            y = is_unsigned ? (__int128)(unsigned __int128)bx : (__int128)vsext(bx, sz);
+        } else {
+            ax = vget(&a, sz, j);
+            bx = vget(&b, sz, j);
+            x = is_unsigned ? (__int128)(unsigned __int128)ax : (__int128)vsext(ax, sz);
+            y = is_unsigned ? (__int128)(unsigned __int128)bx : (__int128)vsext(bx, sz);
+        }
+        switch (op) {
+        case VL_ADDL: z = x + y; break;
+        case VL_ADDW: z = x + y; break;
+        case VL_SUBL: z = x - y; break;
+        case VL_SUBW: z = x - y; break;
+        case VL_MLAL: z = (__int128)vget(&old, sz + 1, i) + x * y; break;
+        case VL_MLSL: z = (__int128)vget(&old, sz + 1, i) - x * y; break;
+        case VL_MULL: z = x * y; break;
+        case VL_ABDL: z = x >= y ? x - y : y - x; break;
+        case VL_ABAL:
+            z = (__int128)vget(&old, sz + 1, i) + (x >= y ? x - y : y - x);
+            break;
+        }
+        vset(&r, sz + 1, i, (uint64_t)z);
+    }
+    *d = r;
+}
+
+/* SQXTN/UQXTN/SQXTUN and their "2" forms. mode:
+ * 0 signed->signed, 1 unsigned->unsigned, 2 signed->unsigned. */
+static inline void v_sat_narrow(V128 *d, const V128 *pn, int dst_sz,
+                                int mode, int upper) {
+    V128 a = *pn, r;
+    int n = 8 >> dst_sz;
+    int dbits = 8 << dst_sz;
+    r.d[0] = upper ? d->d[0] : 0;
+    r.d[1] = 0;
+    for (int i = 0; i < n; i++) {
+        uint64_t raw = vget(&a, dst_sz + 1, i), z;
+        if (mode == 0)
+            z = (uint64_t)v_sat_s((__int128)vsext(raw, dst_sz + 1), dbits);
+        else if (mode == 1)
+            z = v_sat_u((__int128)(unsigned __int128)raw, dbits);
+        else
+            z = v_sat_u((__int128)vsext(raw, dst_sz + 1), dbits);
+        vset(&r, dst_sz, (upper ? n : 0) + i, z);
+    }
+    *d = r;
+}
+
+static inline void v_sat_shift_narrow(V128 *d, const V128 *pn, int shift,
+                                      int dst_sz, int mode, int round,
+                                      int upper, int scalar) {
+    V128 a = *pn, r;
+    int n = scalar ? 1 : (8 >> dst_sz);
+    int dbits = 8 << dst_sz;
+    r.d[0] = upper ? d->d[0] : 0;
+    r.d[1] = 0;
+    for (int i = 0; i < n; i++) {
+        uint64_t raw = vget(&a, dst_sz + 1, i), z;
+        if (mode == 1) {
+            unsigned __int128 x = raw;
+            if (round) x += (unsigned __int128)1 << (shift - 1);
+            x >>= shift;
+            z = v_sat_u((__int128)x, dbits);
+        } else {
+            __int128 x = vsext(raw, dst_sz + 1);
+            if (round) x += (__int128)1 << (shift - 1);
+            x >>= shift;
+            z = mode == 2 ? v_sat_u(x, dbits) : (uint64_t)v_sat_s(x, dbits);
+        }
+        vset(&r, dst_sz, (upper ? n : 0) + i, z);
+    }
+    *d = r;
+}
+
+static inline void v_clz_elements(V128 *d, const V128 *pn, int sz, int n) {
+    V128 a = *pn, r; r.d[0] = 0; r.d[1] = 0;
+    int bits = 8 << sz;
+    for (int i = 0; i < n; i++) {
+        uint64_t x = vget(&a, sz, i);
+        int z = x ? (__builtin_clzll(x) - (64 - bits)) : bits;
+        vset(&r, sz, i, (uint64_t)z);
+    }
+    *d = r;
+}
+
+static inline void v_rev32_elements(V128 *d, const V128 *pn, int sz, int n) {
+    V128 a = *pn, r; r.d[0] = 0; r.d[1] = 0;
+    int per32 = 4 >> sz;
+    for (int i = 0; i < n; i++) {
+        int base = (i / per32) * per32;
+        int j = base + (per32 - 1 - (i % per32));
+        vset(&r, sz, j, vget(&a, sz, i));
+    }
+    *d = r;
+}
+
+static inline void v_sqabs_elements(V128 *d, const V128 *pn, int sz, int n) {
+    V128 a = *pn, r; r.d[0] = 0; r.d[1] = 0;
+    int bits = 8 << sz;
+    for (int i = 0; i < n; i++) {
+        int64_t x = vsext(vget(&a, sz, i), sz);
+        __int128 z = x < 0 ? -(__int128)x : (__int128)x;
+        vset(&r, sz, i, (uint64_t)v_sat_s(z, bits));
+    }
+    *d = r;
+}
+
+static inline void v_i3e_extra(V128 *d, const V128 *pn, const V128 *pm,
+                               int idx, int op, int sz, int n) {
+    V128 b; b.d[0] = 0; b.d[1] = 0;
+    uint64_t e = vget(pm, sz, idx);
+    for (int i = 0; i < n; i++) vset(&b, sz, i, e);
+    v_i3_extra(d, pn, &b, op, sz, n);
+}
+
 /* BSL / BIT / BIF */
 static inline void v_bitsel(V128 *d, const V128 *pn, const V128 *pm, int kind, int q) {
     V128 r;
