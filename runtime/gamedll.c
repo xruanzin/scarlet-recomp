@@ -19,6 +19,7 @@ typedef struct {
     void (*site_inline)(Ctx *, uint64_t);      /* appended (game_shim.c): an older DLL copies only the fields it knows */
     int (*site_midhook)(Ctx *, uint64_t);
     uint64_t (*guest_cntpct)(void);             /* Scarlet generic physical timer */
+    uint64_t (*guest_tpidrro)(Ctx *);           /* Scarlet TPIDRRO_EL0 / TLR */
 } GameHost;
 
 typedef struct {
@@ -55,7 +56,7 @@ const int *game_dyn_sym_count_p;
 
 __attribute__((constructor)) static void bind_game(void) {
     GameHost h = {call_indirect, host_import, guest_trap, guest_unimpl, guest_svc, stx_diag,
-                  sky_site_inline, sky_site_midhook, guest_cntpct};
+                  sky_site_inline, sky_site_midhook, guest_cntpct, guest_tpidrro};
     GameTables t;
     game_bind(&h, &t);
     game_fn_table_p = (const FnEntry (*)[])t.table;
