@@ -43,7 +43,7 @@ HOST_SOURCES = ['hostrt.c', 'boot.c', 'nnsdk.c', 'libcxx.c', 'os_threads.c', 'nv
 # (taken only when present: a tree without the online files, e.g. a public one before they are published, still links)
 HOST_SOURCES[:] = [n for n in HOST_SOURCES if n not in ('nnldn.c', 'net_relay.c', 'rb_net.c') or os.path.exists(os.path.join(HERE, n))]   # rb_net.c: online rollback (R3), off unless SSBU_RB_NET
 if SCARLET:
-    HOST_SOURCES.append('scarlet_loader.c')
+    HOST_SOURCES.extend(['scarlet_loader.c', 'scarlet_ipc.c', 'scarlet_memory.c', 'scarlet_threads.c'])
 # Everything of the host that is derived from the dump is linked into the game DLL instead (game_data.h): the exe is made
 # of the runtime's own sources only and can be built without a dump (scripts/make_release.py).
 GAME_DATA_SOURCES = ['game_data.c', 'sdkdata.c', 'nro_registry.c', 'sdklift_gen.c']
@@ -180,7 +180,8 @@ HAVE_IMGUI = os.path.isfile(os.path.join(IMGUI, 'imgui.h')) and os.path.isfile(o
 CXX_SOURCES = ([os.path.join(HERE, 'menu.cpp')] + [os.path.join(IMGUI, n) for n in ('imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp')]
                if HAVE_IMGUI else [])
 CXX_FLAGS = ['-x', 'c++', '-std=c++14', '-O1', '-g', '-w', '-fno-exceptions', '-fno-rtti', '-D_CRT_SECURE_NO_WARNINGS', '-DIMGUI_USER_CONFIG="menu_imconfig.h"', '-I', HERE, '-I', IMGUI] + SCARLET_FLAGS
-LIBS = ['-luser32', '-lgdi32', '-lwinmm', '-lmfplat', '-lmfreadwrite', '-lmfuuid', '-lole32', '-lshlwapi', '-lshell32', '-lsetupapi']
+# WaitOnAddress / WakeByAddress* are imported from the Windows SDK synchronization library.
+LIBS = ['-lsynchronization', '-luser32', '-lgdi32', '-lwinmm', '-lmfplat', '-lmfreadwrite', '-lmfuuid', '-lole32', '-lshlwapi', '-lshell32', '-lsetupapi']
 # Media Foundation delay-loaded: Windows N without the Media Feature Pack has no MFPlat.dll, and the exe must still start
 # there (the movies then play with FFmpeg, mf_ffmpeg.c); nnmovie_mf.c's movie_mf_present() is asked before any call.
 LIBS += ['-ldelayimp', '-Wl,/DELAYLOAD:MFPlat.DLL', '-Wl,/DELAYLOAD:MFReadWrite.dll']

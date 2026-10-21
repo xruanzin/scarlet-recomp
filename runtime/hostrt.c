@@ -1127,6 +1127,12 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
 void guest_svc(Ctx *c, uint32_t number) {
     if (g_svc_handler && g_svc_handler(c, number)) return;
 #ifdef SCARLET_RECOMP
+    extern int scarlet_ipc_svc(Ctx *, uint32_t);
+    extern int scarlet_memory_svc(Ctx *, uint32_t);
+    extern int scarlet_thread_svc(Ctx *, uint32_t);
+    if (scarlet_thread_svc(c, number)) return;
+    if (scarlet_memory_svc(c, number)) return;
+    if (scarlet_ipc_svc(c, number)) return;
     if (scarlet_svc_basic(c, number)) return;
     printf("\nScarlet SVC %02x at guest f_%llx lr=%llx: x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx\n",
            number, (unsigned long long)c->fn, (unsigned long long)c->x[30],
