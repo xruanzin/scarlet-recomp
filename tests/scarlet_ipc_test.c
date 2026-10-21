@@ -75,6 +75,8 @@ int main(void) {
     cmif(4, 0); send_request(pctl); uint32_t pctl_control = msg[3]; assert(pctl_control);
     cmif(4, 1031); send_request(pctl_control); assert((msg[8] & 0xffu) == 0);
     cmif(4, 1032); send_request(pctl_control); assert(msg[8] == 0);
+    cmif(4, 999); send_request(pctl_control);
+    for (int i = 0; i < 4; ++i) assert(msg[8 + i] == 0);
     ctx.x[0] = pctl_control; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = pctl; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
 
