@@ -251,7 +251,7 @@ static inline uint64_t v_sat_u(__int128 x, int bits) {
 enum {
     IX2_SHADD, IX2_UHADD, IX2_SRHADD, IX2_URHADD,
     IX2_SHSUB, IX2_UHSUB, IX2_SABD, IX2_UABD,
-    IX2_MLA, IX2_MLS,
+    IX2_MUL, IX2_MLA, IX2_MLS,
     IX2_SQADD, IX2_UQADD, IX2_SQSUB, IX2_UQSUB,
     IX2_SQDMULH, IX2_SQRDMULH
 };
@@ -275,6 +275,7 @@ static inline void v_i3_extra(V128 *d, const V128 *pn, const V128 *pm,
         case IX2_UHSUB:   z = ((__int128)ux - (__int128)uy) >> 1; break;
         case IX2_SABD:    z = sx >= sy ? (__int128)sx - sy : (__int128)sy - sx; break;
         case IX2_UABD:    z = ux >= uy ? (unsigned __int128)ux - uy : (unsigned __int128)uy - ux; break;
+        case IX2_MUL:     z = (unsigned __int128)ux * uy; break;
         case IX2_MLA:     z = (__int128)vget(&old, sz, i) + (unsigned __int128)ux * uy; break;
         case IX2_MLS:     z = (__int128)vget(&old, sz, i) - (unsigned __int128)ux * uy; break;
         case IX2_SQADD:   z = v_sat_s((__int128)sx + sy, ebits); break;
