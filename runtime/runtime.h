@@ -40,6 +40,7 @@ extern const int dyn_sym_count;
 void guest_trap(const char *what, uint64_t addr);
 void guest_unimpl(uint64_t pc, uint32_t insn, const char *what);
 void guest_svc(Ctx *c, uint32_t number);
+uint64_t guest_cntpct(void);                  /* Switch ARM generic physical counter (19.2 MHz) */
 
 /* Track R1 round 3 (only in a build with -DR1_MARK, e.g. ssbu_game_p15r1.dll): every guest store marks its 4 KB page in a
  * byte-per-page map, so a save knows exactly which pages the simulation wrote. Two windows: the game's address region
