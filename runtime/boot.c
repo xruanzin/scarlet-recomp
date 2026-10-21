@@ -320,6 +320,12 @@ static DWORD WINAPI guest_main(LPVOID arg) {
     uint8_t *tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     c.x[31] = (uint64_t)(stack + stack_size);          /* the initial SP is the top of the stack (16-byte aligned: the size is whole pages) */
     c.tpidr = (uint64_t)tls;
+#ifdef SCARLET_RECOMP
+    /* Scarlet SDK 16 reloads TPIDR_EL0 from the thread-local-region slot at
+     * +0x1f0 during early nnmusl/allocator setup. Publish the bootstrap
+     * writable TLS pointer before any SDK constructor runs. */
+    memcpy(tls + 0x1f0, &c.tpidr, 8);
+#endif
     { uint64_t os_main_thread_type(void); memcpy(tls + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }   /* [sdk 0x3349dc..e0] nn::os::detail::ThreadManager(): the main thread's ThreadType pointer */
     g_main_ctx = &c;
     { void module_coverage_start(Ctx *main_ctx); module_coverage_start(&c); }   /* nnro.c: SSBU_MODCOV=1 */
