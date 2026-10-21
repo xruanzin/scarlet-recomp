@@ -1060,6 +1060,58 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
                      (unsigned long long)g_scarlet_main_tid);
         return 1;
     }
+    case 0x26: { /* Break(reason, info, size) */
+        uint64_t reason = x[0], info = x[1], size = x[2];
+        /* Horizon notifications (high bit) are non-fatal. */
+        if (reason & 0x80000000u) {
+            trace_printf("Scarlet Break notification reason=%llx info=%llx size=%llx\n",
+                         (unsigned long long)reason, (unsigned long long)info,
+                         (unsigned long long)size);
+            x[0] = 0;
+            return 1;
+        }
+
+        uint32_t result = 0;
+        int readable = 0;
+        if (info && size >= 4) {
+            MEMORY_BASIC_INFORMATION mi;
+            if (VirtualQuery((const void *)(uintptr_t)info, &mi, sizeof mi) &&
+                mi.State == MEM_COMMIT &&
+                !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
+                info + 4 >= info &&
+                info + 4 <= (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize) {
+                memcpy(&result, (const void *)(uintptr_t)info, sizeof result);
+                readable = 1;
+            }
+        }
+
+        if (readable) {
+            unsigned module = result & 0x1ffu;
+            unsigned description = (result >> 9) & 0x1fffu;
+            fprintf(stderr,
+                    "Scarlet svcBreak: reason=%llx result=0x%08x (%04u-%04u; module=%u desc=%u) info=%llx size=%llx guest=f_%llx lr=%llx\n",
+                    (unsigned long long)reason, result, 2000u + module, description,
+                    module, description, (unsigned long long)info,
+                    (unsigned long long)size, (unsigned long long)c->fn,
+                    (unsigned long long)c->x[30]);
+            trace_printf(
+                    "Scarlet svcBreak reason=%llx result=%08x code=%04u-%04u info=%llx size=%llx f_%llx lr=%llx\n",
+                    (unsigned long long)reason, result, 2000u + module, description,
+                    (unsigned long long)info, (unsigned long long)size,
+                    (unsigned long long)c->fn, (unsigned long long)c->x[30]);
+        } else {
+            fprintf(stderr,
+                    "Scarlet svcBreak: reason=%llx info=%llx size=%llx (info unreadable) guest=f_%llx lr=%llx\n",
+                    (unsigned long long)reason, (unsigned long long)info,
+                    (unsigned long long)size, (unsigned long long)c->fn,
+                    (unsigned long long)c->x[30]);
+        }
+        /* A real Break is a guest fatal condition. Do not return success and
+         * continue with corrupted SDK state; preserve the crash after emitting
+         * the actual nn::Result that caused it. */
+        guest_trap("Scarlet svcBreak", readable ? result : reason);
+        return 1;
+    }
     case 0x27: { /* OutputDebugString(ptr, size) */
         size_t len = (size_t)x[1];
         if (len > 4096) len = 4096;
