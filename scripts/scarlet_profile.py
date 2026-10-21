@@ -19,6 +19,11 @@ MAIN_BUILD_ID_PREFIX = MAIN_BUILD_ID[:16]
 # Scarlet's static ExeFS code modules that scarlet_pc already recompiles.
 STATIC_MODULES = ("main", "sdk", "subsdk0")
 LIFT_ABI_REV = "scarlet-tpidrro-v1"
+LIFT_ABI_REV_BY_MODULE = {
+    "main": "scarlet-tpidrro-v1",
+    "sdk": "scarlet-stdalloc-v1",
+    "subsdk0": "scarlet-tpidrro-v1",
+}
 # Guest entry points discovered only through indirect calls during real boot.
 # Keep these sparse: recomp.py splits the containing function at each address,
 # so regenerating a module rewrites only the affected source bucket(s).
