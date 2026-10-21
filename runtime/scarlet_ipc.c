@@ -30,7 +30,7 @@ static unsigned char self_settings[32];
 enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESSION,
        SERVICE_APPLET, SERVICE_PROXY, SERVICE_COMMON, SERVICE_SELF, SERVICE_WINDOW,
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
-       SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR };
+       SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 
 static uint32_t new_session(unsigned char service) {
@@ -144,6 +144,9 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             else if (!strcmp(name, "appletOE")) moved = new_session(SERVICE_APPLET);
             else if (!strcmp(name, "aoc:u")) moved = new_session(SERVICE_AOC);
             else if (!strcmp(name, "ectx:aw")) moved = new_session(SERVICE_ECTX_AW);
+            else if (!strcmp(name, "pctl") || !strcmp(name, "pctl:a") ||
+                     !strcmp(name, "pctl:r") || !strcmp(name, "pctl:s"))
+                moved = new_session(SERVICE_PCTL);
             else {
                 printf("Scarlet SM GetService '%s' is not implemented\n", name);
                 goto unsupported;
@@ -236,6 +239,20 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
         } else if (service == SERVICE_ECTX_REGISTRAR && cmd == 0) {
             /* IContextRegistrar::Complete. The guest has finished populating
              * its context descriptors; nothing needs to be persisted here. */
+        } else if (service == SERVICE_PCTL && (cmd == 0 || cmd == 1)) {
+            /* pctl root -> IParentalControlService. */
+            moved = new_session(SERVICE_PCTL_CONTROL);
+            if (!moved) result = 0xd201;
+        } else if (service == SERVICE_PCTL_CONTROL &&
+                   (cmd == 1018 || cmd == 1031 || cmd == 1035)) {
+            /* Stereo/free-communication/etc restrictions: disabled. */
+            value = 0; data_size = 1;
+        } else if (service == SERVICE_PCTL_CONTROL && cmd == 1032) {
+            value = 0; data_size = 4;
+        } else if (service == SERVICE_PCTL_CONTROL) {
+            /* Match the proven Scarlet runtime: remaining parental-control
+             * commands are accepted as no-ops for an unrestricted local user. */
+            trace_printf("Scarlet pctl cmd %u -> unrestricted/no-op\n", cmd);
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
