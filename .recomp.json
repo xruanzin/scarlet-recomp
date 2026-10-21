@@ -1,68 +1,71 @@
 {
-  "game": "Super Smash Bros. Ultimate",
+  "game": "Pokémon Scarlet",
   "system": "Switch",
   "type": [
     "recomp",
-    "decomp"
+    "reverse-engineering"
   ],
-  "project": "OpenSmash-Ultimate (ssbu-recomp)",
-  "status": "playable",
+  "project": "Scarlet Recomp",
+  "status": "in-progress",
   "targets": [
     "Windows"
   ],
   "toolchain": [
-    "Custom AArch64-to-C lifter",
+    "ssbu-recomp AArch64-to-C lifter architecture",
     "Clang",
+    "REA",
     "Ghidra"
   ],
   "original": [
     {
       "region": "World",
-      "revision": "13.0.4",
-      "serial": "01006A800016E000"
-    },
-    {
-      "region": "World",
-      "revision": "13.0.5",
-      "serial": "01006A800016E000"
+      "revision": "1.0.0",
+      "serial": "0100A3D008C5C000",
+      "main_build_id": "ca44e7dd62e61a2a4e8889b3319ae173375770fd"
     }
   ],
-  "approach": "Static recompilation of the whole game (AArch64 to C, built natively, no emulation); NVN graphics on Vulkan; the fighters' script code as C++ source.",
-  "notes": "Native Windows build made on your PC from your own dump by a one-click installer (no Visual Studio, no firmware: prebuilt runtime release and open-source system fonts). In-game settings menu (F1) with full remapping, on-screen keyboard, Vulkan renderer, 13.0.4 and 13.0.5. Online play over Local Wireless is experimental; rollback netcode in progress.",
+  "approach": "Static ahead-of-time recompilation of Pokémon Scarlet AArch64 code to native host code, using an ssbu-recomp-derived runtime and NVN-to-Vulkan graphics layer.",
+  "notes": "Bootstrap port. No game code or assets are stored in the repository. Scarlet-specific reverse-engineering knowledge is migrated from xruanzin/scarlet_pc while the legacy repository remains unchanged.",
   "help": [
-    "Rollback netcode (savestate ring, logic-only frames)",
-    "Testing on AMD and Intel GPUs",
-    "Fighter and item decompilation",
-    "Linux build"
+    "Scarlet ExeFS ingestion (main/sdk/subsdk0)",
+    "Multi-module lifter generalization",
+    "Scarlet runtime/HLE coverage",
+    "NVN/Vulkan correctness and performance"
   ],
   "tags": [
     "static-recompilation",
     "vulkan",
-    "rollback",
-    "smash"
+    "pokemon-scarlet",
+    "switch"
   ],
   "maintainers": [
     {
-      "name": "Denkishi",
-      "link": "https://github.com/Denkishi"
+      "name": "xruanzin",
+      "link": "https://github.com/xruanzin"
+    }
+  ],
+  "credits": [
+    {
+      "name": "Denkishi / OpenSmash-Ultimate",
+      "link": "https://github.com/Denkishi/ssbu-recomp"
+    },
+    {
+      "name": "scarlet_pc / LAS Recomp lineage",
+      "link": "https://github.com/xruanzin/scarlet_pc"
     }
   ],
   "links": [
     {
       "label": "Source",
+      "url": "https://github.com/xruanzin/scarlet-recomp"
+    },
+    {
+      "label": "Upstream",
       "url": "https://github.com/Denkishi/ssbu-recomp"
     },
     {
-      "label": "Website",
-      "url": "https://denkishi.github.io/opensmash-site/"
-    },
-    {
-      "label": "Discord",
-      "url": "https://discord.gg/RyZpx3u2t4"
-    },
-    {
-      "label": "How to build",
-      "url": "https://github.com/Denkishi/ssbu-recomp/blob/main/BUILDING.md"
+      "label": "Legacy Scarlet research",
+      "url": "https://github.com/xruanzin/scarlet_pc"
     }
   ]
 }
