@@ -6,6 +6,7 @@
 #include "hostrt.h"
 #define THREAD_BASE 0x20000u
 #define THREAD_LIMIT 256
+#define MAIN_THREAD_HANDLE 0x80u
 typedef struct {
     Ctx ctx;
     uint64_t entry, id, mask;
@@ -22,6 +23,7 @@ static ScarletThread *lookup(uint32_t h) {
     if (h == 0xffff8000) return current_thread;
     return h >= THREAD_BASE && h < THREAD_BASE + THREAD_LIMIT ? threads[h - THREAD_BASE] : NULL;
 }
+uint32_t scarlet_main_thread_handle(void) { return MAIN_THREAD_HANDLE; }
 static void release_thread(ScarletThread *t) {
     if (--t->refs) return;
     if (t->host) CloseHandle(t->host);
@@ -59,6 +61,12 @@ int scarlet_thread_svc(Ctx *c, uint32_t n) {
         x[0] = current_thread->core; return 1;
     }
     if (n != 8 && n != 9 && n != 0x0c && n != 0x0d && n != 0x0e && n != 0x0f && n != 0x16 && n != 0x25) return 0;
+    /* The process main thread is owned by boot.c rather than this table. Its
+     * persistent kernel handle is nevertheless a valid CloseHandle target. */
+    if (n == 0x16 && (uint32_t)x[0] == MAIN_THREAD_HANDLE) {
+        x[0] = 0;
+        return 1;
+    }
     AcquireSRWLockExclusive(&thread_lock);
     int handled = 1;
     if (n == 8) {
