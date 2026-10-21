@@ -367,9 +367,12 @@ static DWORD WINAPI guest_main(LPVOID arg) {
                modern ? "5-arg" : "4-arg", (unsigned long long)start);
         trace_printf("=== Scarlet nn::init::Start %s ABI @ %llx\n",
                      modern ? "5-arg" : "4-arg", (unsigned long long)start);
-        /* Horizon's current-thread pseudo handle is what rtld normally passes
-         * as the main-thread handle. x1 is the loader argument (none here). */
-        c.x[0] = 0xffff8000u;
+        /* The real rtld passes the process main thread's persistent kernel
+         * handle, not the 0xffff8000 current-thread pseudo handle. Several SDK
+         * paths accept the pseudo handle for queries, but nn::init::Start keeps
+         * the real handle as process bootstrap state. */
+        { extern uint32_t scarlet_main_thread_handle(void);
+          c.x[0] = scarlet_main_thread_handle(); }
         c.x[1] = 0;
         if (modern) {
             c.x[2] = mark_fn;
