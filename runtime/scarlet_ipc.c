@@ -32,6 +32,8 @@ enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESS
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
        SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
+static volatile uint32_t g_scarlet_terminate_result;
+uint32_t scarlet_last_terminate_result(void) { return g_scarlet_terminate_result; }
 
 static uint32_t new_session(unsigned char service) {
     uint32_t h = 0;
@@ -191,9 +193,14 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             memcpy(&value, "pt-BR", 5);
             data_size = 8;
         } else if (service == SERVICE_APPLICATION && cmd == 22) {
-            /* SetTerminateResult(Result): store/log only, no output payload. */
+            /* SetTerminateResult(Result) is immediately followed by svcBreak on
+             * fatal bootstrap paths. Preserve the value so Break diagnostics
+             * can recover it even if the SDK's temporary Result object is
+             * clobbered before svcBreak. */
             uint32_t terminate_result = input_size >= 4 ? data[0] : 0;
+            g_scarlet_terminate_result = terminate_result;
             trace_printf("Scarlet SetTerminateResult(%08x)\n", terminate_result);
+            printf("Scarlet SetTerminateResult = 0x%08x\n", terminate_result);
         } else if (service == SERVICE_APPLICATION && cmd == 23) {
             /* GetDisplayVersion returns exactly 0x10 bytes. */
             memcpy(out_data, "1.0.0", 5);
