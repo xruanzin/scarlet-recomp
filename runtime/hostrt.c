@@ -1093,6 +1093,16 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
         const char *fn_sym = scarlet_symbolize_static_address(c->fn, &fn_sym_addr);
         const char *lr_sym = scarlet_symbolize_static_address(c->x[30], &lr_sym_addr);
         if (readable) {
+            extern uint32_t scarlet_last_terminate_result(void);
+            uint32_t terminate_result = scarlet_last_terminate_result();
+            if (result == 0 && terminate_result != 0) {
+                trace_printf("Scarlet svcBreak: Result object is zero; using preceding SetTerminateResult=%08x\n",
+                             terminate_result);
+                fprintf(stderr,
+                        "Scarlet svcBreak: Result object is zero; preceding SetTerminateResult=0x%08x\n",
+                        terminate_result);
+                result = terminate_result;
+            }
             unsigned module = result & 0x1ffu;
             unsigned description = (result >> 9) & 0x1fffu;
             fprintf(stderr,
