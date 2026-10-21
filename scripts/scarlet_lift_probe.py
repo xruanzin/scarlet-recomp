@@ -33,6 +33,10 @@ def run_module(name, bin_dir, out_root, jobs):
     env["RECOMP_BIN"] = bin_dir
     env["RECOMP_MODULE"] = name
     env["RECOMP_BASE"] = hex(profile.MODULE_BASES[name])
+    late = getattr(profile, "LATE_INDIRECT_STARTS", {}).get(name, ())
+    if late:
+        env["RECOMP_EXTRA_STARTS"] = ",".join(hex(x) for x in late)
+        print("late indirect starts:", env["RECOMP_EXTRA_STARTS"], flush=True)
     module_map = os.path.join(REPO, "build", "scarlet_module_map.json")
     if os.path.isfile(module_map):
         env["RECOMP_MODULE_MAP"] = module_map
