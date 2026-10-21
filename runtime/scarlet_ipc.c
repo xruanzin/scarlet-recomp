@@ -388,7 +388,11 @@ static int ipc_svc(Ctx *c, uint32_t n) {
         trace_printf("Scarlet ConnectToNamedPort '%.*s' -> %x\n", 12, name ? name : "", h);
         x[0] = h ? 0 : 0xf201; x[1] = h; return 1;
     }
-    case 0x21: x[0] = request(c, (uint32_t)x[0], (uint32_t *)(uintptr_t)c->tpidr, 0x100); return 1;
+    case 0x21: {
+        extern uint64_t guest_tpidrro(Ctx *);
+        x[0] = request(c, (uint32_t)x[0], (uint32_t *)(uintptr_t)guest_tpidrro(c), 0x100);
+        return 1;
+    }
     case 0x22: x[0] = request(c, (uint32_t)x[2], (uint32_t *)(uintptr_t)x[0], (size_t)x[1]); return 1;
     default: return 0;
     }
