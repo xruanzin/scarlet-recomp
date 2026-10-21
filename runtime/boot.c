@@ -308,13 +308,54 @@ static void scarlet_init_all_static_modules(Ctx *c) {
  * nninitStartup, when the SDK allocator/thread state exists, and before
  * nnMain. The second callback is the companion/fini hook; modern SDKs add a
  * mark callback in front of them. */
+static volatile LONG g_scarlet_rtld_init_seen;
+static volatile LONG g_scarlet_force_boot_active;
+
+int scarlet_rtld_init_seen(void) {
+    return InterlockedCompareExchange(&g_scarlet_rtld_init_seen, 0, 0) != 0;
+}
+
 static void scarlet_rtld_init(Ctx *c) {
+    InterlockedExchange(&g_scarlet_rtld_init_seen, 1);
     printf("[Scarlet rtld] init callback\n");
     trace_printf("=== Scarlet rtld init callback\n");
     scarlet_init_all_static_modules(c);
 }
 static void scarlet_rtld_fini(Ctx *c) { (void)c; }
 static void scarlet_rtld_mark(Ctx *c) { (void)c; }
+
+/* Diagnostic/bring-up escape hatch: if nn::init::Start takes a fatal AM path
+ * before invoking rtld_init, continue at the loader boundary so we can reach
+ * the game's real module constructors and nnMain. This is intentionally gated
+ * by SCARLET_FORCE_BOOT=1 and is not normal runtime semantics. */
+void scarlet_force_boot_after_fatal(Ctx *c, uint32_t result) {
+    if (InterlockedCompareExchange(&g_scarlet_force_boot_active, 1, 0) != 0)
+        guest_trap("Scarlet force-boot recursion", result);
+    if (scarlet_rtld_init_seen())
+        guest_trap("Scarlet force-boot after rtld init", result);
+
+    fprintf(stderr,
+            "Scarlet FORCE BOOT: bypassing pre-rtld fatal Result=0x%08x; running module init + nnMain\n",
+            result);
+    trace_printf("=== Scarlet FORCE BOOT result=%08x\n", result);
+
+    InterlockedExchange(&g_scarlet_rtld_init_seen, 1);
+    scarlet_init_all_static_modules(c);
+
+    uint64_t main_fn = NN_MAIN;
+    if (!main_fn)
+        guest_trap("Scarlet nnMain not found during force boot", 0);
+
+    printf("[Scarlet FORCE BOOT] entering nnMain @ %llx\n",
+           (unsigned long long)main_fn);
+    trace_printf("=== Scarlet FORCE BOOT nnMain @ %llx\n",
+                 (unsigned long long)main_fn);
+    call_guest(c, main_fn);
+
+    /* nnMain normally owns the process lifetime. If it ever returns, terminate
+     * cleanly instead of falling back into the SDK's noreturn Abort path. */
+    ExitProcess(0);
+}
 #endif
 
 static DWORD WINAPI guest_main(LPVOID arg) {
