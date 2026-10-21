@@ -10,9 +10,17 @@
 #include <time.h>
 #include "runtime.h"
 #include "hostrt.h"
+#ifdef SCARLET_RECOMP
+#include "scarlet_loader.h"
+#endif
 
+#ifdef SCARLET_RECOMP
+#define NNINIT_STARTUP main_export("nninitStartup")
+#define NN_MAIN main_export("nnMain")
+#else
 #define NNINIT_STARTUP GA(GUEST_BASE + 0x2c55e0ULL)
 #define NN_MAIN GA(GUEST_BASE + 0x2c5620ULL)
+#endif
 #define INIT_ARRAY (GUEST_BASE + g_main.init_array)       /* from the dynamic section (hostrt.c); 13.0.4: 0x52a7be0 */
 #define INIT_ARRAY_SIZE g_main.init_arraysz                 /* 13.0.4: 0x990 */
 
@@ -234,6 +242,69 @@ void main_stack_report(void) {
            lo.State == MEM_RESERVE ? "no access" : "ACCESSIBLE", hi.State == MEM_RESERVE ? "no access" : "ACCESSIBLE");
 }
 
+#ifdef SCARLET_RECOMP
+static void scarlet_run_init_array(Ctx *c, const ScarletStaticModule *m) {
+    if (!m->init_array || !m->init_arraysz) return;
+    uint64_t arr = m->base + m->init_array;
+    for (uint64_t i = 0; i < m->init_arraysz / 8; i++) {
+        uint64_t fn = rd64(arr + i * 8);
+        if (fn) call_guest(c, fn);
+    }
+}
+
+/* SDK 16 DT_INIT begins with ADRP ... LDR W8 of the module-local DSO init
+ * status word. When it is 1, rtld is responsible for running init_array. */
+static uint64_t scarlet_module_init_status(const ScarletStaticModule *m) {
+    if (!m->init) return 0;
+    uint64_t page[32] = {0};
+    uint64_t begin = m->base + m->init;
+    for (uint64_t pc = begin; pc < begin + 0x40; pc += 4) {
+        uint32_t w = rd32(pc);
+        if ((w & 0x9f000000u) == 0x90000000u) {
+            uint32_t rd = w & 31u;
+            uint64_t immlo = (w >> 29) & 3u;
+            uint64_t immhi = (w >> 5) & 0x7ffffu;
+            int64_t imm = (int64_t)((immhi << 2) | immlo);
+            if (imm & (1ll << 20)) imm -= 1ll << 21;
+            page[rd] = (pc & ~0xfffull) + (uint64_t)(imm * 0x1000ll);
+        } else if ((w & 0xffc0001fu) == 0xb9400008u) {
+            uint32_t rn = (w >> 5) & 31u;
+            if (page[rn])
+                return page[rn] + (uint64_t)((w >> 10) & 0xfffu) * 4u;
+        }
+    }
+    return 0;
+}
+
+static void scarlet_module_init(Ctx *c, const ScarletStaticModule *m) {
+    printf("[Scarlet init] %s: DT_INIT=%llx init_array=%llu\n",
+           m->name, (unsigned long long)(m->init ? m->base + m->init : 0),
+           (unsigned long long)(m->init_arraysz / 8));
+    if (!m->init) {
+        scarlet_run_init_array(c, m);
+        return;
+    }
+    call_guest(c, m->base + m->init);
+    uint64_t status_addr = scarlet_module_init_status(m);
+    if (!status_addr) {
+        fprintf(stderr, "Scarlet init: could not locate %s DT_INIT status word\n", m->name);
+        exit(1);
+    }
+    uint32_t status = rd32(status_addr);
+    printf("[Scarlet init] %s status=%u @ %llx\n",
+           m->name, status, (unsigned long long)status_addr);
+    if (status == 1) scarlet_run_init_array(c, m);
+}
+
+static void scarlet_init_all_static_modules(Ctx *c) {
+    /* Match rtld dependency order used by the proven Scarlet runtime:
+     * sdk, subsdk(s), then main. */
+    for (int i = 1; i < SCARLET_STATIC_MODULE_COUNT; i++)
+        scarlet_module_init(c, &g_scarlet_static_modules[i]);
+    scarlet_module_init(c, &g_scarlet_static_modules[0]);
+}
+#endif
+
 static DWORD WINAPI guest_main(LPVOID arg) {
     (void)arg;
     static Ctx c;
@@ -261,6 +332,11 @@ static DWORD WINAPI guest_main(LPVOID arg) {
     trace_printf("=== phase 1: nninitStartup\n");
     call_guest(&c, NNINIT_STARTUP);
 
+#ifdef SCARLET_RECOMP
+    printf("[phase 2] Scarlet static module initialization\n");
+    trace_printf("=== phase 2: Scarlet sdk/subsdk0/main initialization\n");
+    scarlet_init_all_static_modules(&c);
+#else
     int count = (int)(INIT_ARRAY_SIZE / 8);
     printf("[phase 2] %d static constructors\n", count);
     trace_printf("=== phase 2: static constructors\n");
@@ -270,6 +346,7 @@ static DWORD WINAPI guest_main(LPVOID arg) {
         trace_printf("--- constructor %d at %llx\n", i, (unsigned long long)fn);
         call_guest(&c, fn);
     }
+#endif
 
     { void debug_mode_init(void); debug_mode_init(); }       /* debug_mode.c: test-only fast mode, nothing without SSBU_* variables */
     printf("[phase 3] nnMain\n");
@@ -421,6 +498,16 @@ static void romfs_fail(const char *msg) {
 /* The game cannot run without data.arc: say so instead of crashing later inside the game. Modes that run without game data
  * (the self-tests, all of which exit) skip it. */
 static void check_romfs(void) {
+#ifdef SCARLET_RECOMP
+    const char *rom = getenv("SSBU_ROMFS");
+    const char *dir = rom && rom[0] ? rom : "..\\romfs";
+    DWORD a = GetFileAttributesA(dir);
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return;
+    char msg[2 * MAX_PATH + 160];
+    snprintf(msg, sizeof msg, "Pokemon Scarlet RomFS folder was not found: %s", dir);
+    romfs_fail(msg);
+    return;
+#else
     static const char *const no_data[] = {"SSBU_SDK_SELFTEST", "SSBU_VK_SELFTEST", "SSBU_CXXRT_SELFTEST", "SSBU_MISC_SELFTEST", "SSBU_EH_MAIN_TEST"};
     const char *rom = getenv("SSBU_ROMFS");
     char probe[MAX_PATH + 16], msg[2 * MAX_PATH + 800];
@@ -448,11 +535,16 @@ static void check_romfs(void) {
                  "(the .nrr folder sits beside data.arc).", dir);
     }
     romfs_fail(msg);
+#endif
 }
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--write-dump")) { int diag_dump_helper(int, char **); return diag_dump_helper(argc, argv); }   /* hostrt.c: minidump of the crashed game, written from outside */
+#ifdef SCARLET_RECOMP
+    g_elf = argc > 1 ? argv[1] : "..\\binaries\\1.0.0\\main.elf";
+#else
     g_elf = argc > 1 ? argv[1] : "..\\binaries\\13.0.4\\main.elf";
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
     print_build_identity();
     launch_defaults();
