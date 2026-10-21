@@ -29,6 +29,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_location  # noqa: E402
+import scarlet_profile as scarlet_profile  # noqa: E402
 
 
 def ini_on(path, key):
@@ -95,10 +96,20 @@ def main():
         a.build = os.path.abspath(a.build or build_location.get())   # the game runs in build\work: a relative --build would point elsewhere there
         if a.play:
             a.userdata = a.userdata or os.path.join(a.build, 'saves')
-            if not (os.path.isfile(os.path.join(a.build, 'work', 'ssbu_native.exe')) and os.path.isfile(os.path.join(a.build, 'state.json'))):
-                print('The game is not built yet (looked in %s): double-click "Install SSBU.bat" first.' % a.build)
+            state_path = os.path.join(a.build, 'state.json')
+            state_hint = {}
+            try:
+                with open(state_path) as sf:
+                    state_hint = json.load(sf)
+            except (OSError, ValueError):
+                pass
+            scarlet_hint = state_hint.get('game_version') == scarlet_profile.BASE_VERSION and bool(state_hint.get('scarlet_main_build_id'))
+            expected_exe = scarlet_profile.WINDOWS_EXE if scarlet_hint else 'ssbu_native.exe'
+            expected_game = scarlet_profile.GAME_DLL if scarlet_hint else 'ssbu_game_eh_o1.dll'
+            if not (os.path.isfile(os.path.join(a.build, 'work', expected_exe)) and os.path.isfile(state_path)):
+                print('The game is not built yet (looked in %s): run scripts/setup.py first.' % a.build)
                 return 1
-            gone = [f for f in ('ssbu_game_eh_o1.dll', 'SDL3.dll', 'ssbu_glslang.dll') if not os.path.isfile(os.path.join(a.build, 'work', f))]
+            gone = [f for f in (expected_game, 'SDL3.dll', 'ssbu_glslang.dll') if not os.path.isfile(os.path.join(a.build, 'work', f))]
             if gone:
                 print('The game files are incomplete: %s missing in %s.\n'
                       'Usually an antivirus removed it (Windows Security > Virus & threat protection > Protection history: restore it\n'
@@ -118,11 +129,12 @@ def main():
                 print('Playing. The game log goes to %s (F1 > Log shows it). This window can stay minimised.' % a.log)
         if not a.userdata:
             ap.error('--userdata is required (or --play)')
-    main_exe = 'ssbu_native' if (a.linux or a.mac) else 'ssbu_native.exe'
-    a.exe = a.exe or main_exe
     state_file = os.path.join(a.build, 'state.json')
     with open(state_file) as f:
         state = json.load(f)
+    is_scarlet = state.get('game_version') == scarlet_profile.BASE_VERSION and bool(state.get('scarlet_main_build_id'))
+    main_exe = 'ssbu_native' if (a.linux or a.mac) else (scarlet_profile.WINDOWS_EXE if is_scarlet else 'ssbu_native.exe')
+    a.exe = a.exe or main_exe
     work = os.path.join(a.build, 'work')
     rollback = False
     if a.play and a.exe == main_exe and not (a.linux or a.mac) and ini_on(os.path.join(a.build, 'config', 'graphics.ini'), 'rollback'):
@@ -134,7 +146,7 @@ def main():
     native = os.path.join(work, main_exe)
     if not os.path.exists(exe):
         shutil.copy2(native, exe)
-    elif exe != native and os.path.getmtime(exe) < os.path.getmtime(native):
+    elif exe != native and os.path.exists(native) and os.path.getmtime(exe) < os.path.getmtime(native):
         # a copy made before the last link runs the old runtime; an exe linked on purpose with other sources
         # (RECOMP_EXE) is older too, so it is only replaced when asked
         if a.refresh:
@@ -163,11 +175,15 @@ def main():
         # libopus decodes the game's music and most sounds (testers' log 2026-10-20: "libopus NOT FOUND", no sound): the
         # copy install.py fetched into deps\opus is used when the one beside the exe is missing
         dep = os.path.join(REPO, 'deps', 'opus', 'libopus-0.dll')
+        msys = next((p for p in (r'C:\\msys64\\ucrt64\\bin\\libopus-0.dll',
+                                 r'C:\\msys64\\mingw64\\bin\\libopus-0.dll',
+                                 r'C:\\msys64\\clang64\\bin\\libopus-0.dll') if os.path.isfile(p)), None)
         if os.path.isfile(dep):
             env['SSBU_OPUS_DLL'] = dep
+        elif msys:
+            env['SSBU_OPUS_DLL'] = msys
         else:
-            print('WARNING: libopus-0.dll is missing (beside the game and in deps\\opus): the music and most sounds will be silent.\n'
-                  'Double-click "Install SSBU.bat" and press Resume: it downloads it again (an antivirus may have removed it).')
+            print('WARNING: libopus-0.dll is missing (beside the game and in deps\\opus): the music and most sounds will be silent.')
     for sub, var in (('fonts', 'SSBU_FONTS'), ('zoneinfo', 'SSBU_TZDIR')):
         p = os.path.join(a.build, 'sysdata', sub)
         if os.path.isdir(p):
