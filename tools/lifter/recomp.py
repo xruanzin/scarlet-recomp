@@ -205,6 +205,14 @@ class Fn:
         return '{ %s return; }' % self.env.call(target)
 
     def lift(self, w, pc):
+        # UDF is architecturally an intentional undefined-instruction trap.
+        # Scarlet also contains 0xe7ffdefe as an unreachable invalid/padding
+        # sentinel. Model both as traps instead of reporting them as missing
+        # lifter coverage; reaching either still stops at the exact guest PC.
+        if (w & 0xffff0000) == 0:
+            return 'guest_trap("udf", 0x%xULL);' % pc
+        if w == 0xe7ffdefe:
+            return 'guest_trap("invalid instruction", 0x%xULL);' % pc
         op0 = bits(w, 28, 25)
         if op0 in (8, 9):
             return self.dp_imm(w, pc)
