@@ -176,8 +176,30 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             if (!*event) *event = CreateEventW(NULL, TRUE, FALSE, NULL);
             copied = copy_event(*event);
             if (!copied) result = 0xd201;
+        } else if (service == SERVICE_APPLICATION && cmd == 20) {
+            /* EnsureSaveData -> required size. Saves live in SSBU_USERDATA, so
+             * no additional system-save allocation is required here. */
+            value = 0; data_size = 8;
+        } else if (service == SERVICE_APPLICATION && cmd == 21) {
+            /* GetDesiredLanguage. nn::settings language code is an 8-byte
+             * packed ASCII string; use pt-BR for this host/user profile. */
+            value = 0;
+            memcpy(&value, "pt-BR", 5);
+            data_size = 8;
+        } else if (service == SERVICE_APPLICATION && cmd == 22) {
+            /* SetTerminateResult(Result): the application reports its eventual
+             * exit result to AM. Record it only in the trace; boot continues. */
+            uint32_t terminate_result = input_size >= 4 ? data[0] : 0;
+            trace_printf("Scarlet SetTerminateResult(%08x)\n", terminate_result);
+        } else if (service == SERVICE_APPLICATION && cmd == 23) {
+            /* GetDisplayVersion is 16 bytes in Horizon. The bootstrap only
+             * needs a valid version string; the response writer below currently
+             * supports scalar payloads, so return the first 8 bytes ("1.0.0"). */
+            value = 0;
+            memcpy(&value, "1.0.0", 5);
+            data_size = 8;
         } else if (service == SERVICE_APPLICATION && cmd == 40) {
-            value = 0; data_size = 4; /* NotifyRunning, no restart requested */
+            /* NotifyRunning has no output payload. */
         } else if (service == SERVICE_COMMON && cmd == 900) {
             request_exit_on_next_program = 1;
         } else if (service == SERVICE_COMMON && cmd == 0) {
