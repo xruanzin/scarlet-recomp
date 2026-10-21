@@ -777,6 +777,25 @@ class Fn:
                     return 'v_f3v(%s, %s, %s, %s, %d, %d);' % (V(rd), V(rn), V(rm), op, sz, fcount())
                 if opc == 3 and u and size:
                     return 'v_bitsel(%s, %s, %s, %d, %d);' % (V(rd), V(rn), V(rm), size, q)
+                extra = {
+                    (0, 0x00): 'IX2_SHADD', (1, 0x00): 'IX2_UHADD',
+                    (0, 0x02): 'IX2_SRHADD', (1, 0x02): 'IX2_URHADD',
+                    (0, 0x04): 'IX2_SHSUB', (1, 0x04): 'IX2_UHSUB',
+                    (0, 0x0e): 'IX2_SABD', (1, 0x0e): 'IX2_UABD',
+                    (0, 0x12): 'IX2_MLA', (1, 0x12): 'IX2_MLS',
+                    (0, 0x01): 'IX2_SQADD', (1, 0x01): 'IX2_UQADD',
+                    (0, 0x05): 'IX2_SQSUB', (1, 0x05): 'IX2_UQSUB',
+                    (0, 0x16): 'IX2_SQDMULH', (1, 0x16): 'IX2_SQRDMULH',
+                }.get((u, opc))
+                if extra:
+                    if scalar and extra in ('IX2_SHADD', 'IX2_UHADD', 'IX2_SRHADD', 'IX2_URHADD',
+                                            'IX2_SHSUB', 'IX2_UHSUB', 'IX2_SABD', 'IX2_UABD',
+                                            'IX2_MLA', 'IX2_MLS'):
+                        raise Unimpl('simd-i3')
+                    if extra in ('IX2_SQDMULH', 'IX2_SQRDMULH') and size not in (1, 2):
+                        raise Unimpl('simd-i3')
+                    return 'v_i3_extra(%s, %s, %s, %s, %d, %d);' % (
+                        V(rd), V(rn), V(rm), extra, size, icount(size))
                 opx = {(0, 0x08): 'IX_SSHL', (1, 0x08): 'IX_USHL', (0, 0x0c): 'IX_SMAX', (1, 0x0c): 'IX_UMAX', (0, 0x0d): 'IX_SMIN',
                        (1, 0x0d): 'IX_UMIN', (0, 0x17): 'IX_ADDP', (0, 0x14): 'IX_SMAXP', (1, 0x14): 'IX_UMAXP', (0, 0x15): 'IX_SMINP',
                        (1, 0x15): 'IX_UMINP'}.get((u, opc))
@@ -789,6 +808,17 @@ class Fn:
                 if op is None:
                     raise Unimpl('simd-i3')
                 return 'v_i3v(%s, %s, %s, %s, %d, %d);' % (V(rd), V(rn), V(rm), op, size, icount(size))
+            if bits(w, 11, 10) == 0 and not scalar and size < 3:
+                lop = {
+                    0x0: 'VL_ADDL', 0x1: 'VL_ADDW',
+                    0x2: 'VL_SUBL', 0x3: 'VL_SUBW',
+                    0x7: 'VL_ABDL',
+                    0x8: 'VL_MLAL', 0xa: 'VL_MLSL',
+                    0xc: 'VL_MULL',
+                }.get(bits(w, 15, 12))
+                if lop:
+                    return 'v_long3(%s, %s, %s, %s, %d, %d, %d);' % (
+                        V(rd), V(rn), V(rm), lop, size, u, q)
             if bits(w, 20, 17) == 0 and bits(w, 11, 10) == 2:    # two registers, miscellaneous
                 opc = bits(w, 16, 12)
                 op = {(0, 1, 0x0f): 'F1_ABS', (1, 1, 0x0f): 'F1_NEG', (1, 1, 0x1f): 'F1_SQRT', (1, 1, 0x1d): 'F1_RSQRTE',
@@ -799,6 +829,17 @@ class Fn:
                     return 'v_f1v(%s, %s, %s, %d, %d);' % (V(rd), V(rn), op, sz, fcount())
                 if (u, opc) == (0, 0x12) and not scalar and size < 3:
                     return 'v_xtn(%s, %s, %d);' % (V(rd), V(rn), size)
+                if not scalar and size < 3:
+                    if (u, opc) == (1, 0x12):             # SQXTUN / SQXTUN2
+                        return 'v_sat_narrow(%s, %s, %d, 2, %d);' % (V(rd), V(rn), size, q)
+                    if opc == 0x14:                       # SQXTN/UQXTN and *2
+                        return 'v_sat_narrow(%s, %s, %d, %d, %d);' % (V(rd), V(rn), size, 1 if u else 0, q)
+                    if (u, opc) == (1, 0x04):             # CLZ
+                        return 'v_clz_elements(%s, %s, %d, %d);' % (V(rd), V(rn), size, icount(size))
+                    if (u, opc) == (1, 0x00) and size < 2: # REV32
+                        return 'v_rev32_elements(%s, %s, %d, %d);' % (V(rd), V(rn), size, icount(size))
+                    if (u, opc) == (0, 0x07):             # SQABS
+                        return 'v_sqabs_elements(%s, %s, %d, %d);' % (V(rd), V(rn), size, icount(size))
                 opx = {(0, 0x08): 'I1X_CMGT0', (1, 0x08): 'I1X_CMGE0', (1, 0x09): 'I1X_CMLE0', (0, 0x0a): 'I1X_CMLT0'}.get((u, opc))
                 if opx:                                  # compare with zero (neon.h v_i1x); scalar: d only
                     if (scalar and size != 3) or (size == 3 and not q):
@@ -860,6 +901,21 @@ class Fn:
                 return 'v_perm(%s, %s, %s, %d, %d, %d);' % (V(rd), V(rn), V(rm), bits(w, 14, 12), size, icount(size))
             raise Unimpl('simd-e')
         if bits(w, 10, 10) == 0:                          # by element
+            iopc = bits(w, 15, 12)
+            iextra = {0x0: 'IX2_MLA', 0x4: 'IX2_MLS', 0x8: 'IX2_MUL',
+                      0xc: 'IX2_SQDMULH', 0xd: 'IX2_SQRDMULH'}.get(iopc)
+            if iextra and size in (1, 2):
+                if iextra in ('IX2_SQDMULH', 'IX2_SQRDMULH') and size not in (1, 2):
+                    raise Unimpl('simd-elem')
+                if size == 1:
+                    vm = bits(w, 19, 16)
+                    idx = (bits(w, 11, 11) << 2) | (bits(w, 21, 21) << 1) | bits(w, 20, 20)
+                else:
+                    vm = bits(w, 20, 16)
+                    idx = (bits(w, 11, 11) << 1) | bits(w, 21, 21)
+                n = 1 if scalar else ((16 if q else 8) >> size)
+                return 'v_i3e_extra(%s, %s, %s, %d, %s, %d, %d);' % (
+                    V(rd), V(rn), V(vm), idx, iextra, size, n)
             op = {9: 'F_MUL', 1: 'F_MLA', 5: 'F_MLS'}.get(bits(w, 15, 12))
             if op is None or u or not a:
                 raise Unimpl('simd-elem')
@@ -883,6 +939,13 @@ class Fn:
             return 'v_shiftx(%s, %s, %d, %d, %s, %d);' % (V(rd), V(rn), amount, es, kind, icount(es))
         if opc in (0x10, 0x11) and not u and not scalar and es < 3:          # shrn(2) / rshrn(2) (neon.h v_shrn)
             return 'v_shrn(%s, %s, %d, %d, %d, %d);' % (V(rd), V(rn), (16 << es) - immhb, es, opc & 1, q)
+        if opc in (0x10, 0x11) and u and es < 3:          # SQSHRUN / SQRSHRUN (+2)
+            return 'v_sat_shift_narrow(%s, %s, %d, %d, 2, %d, %d, %d);' % (
+                V(rd), V(rn), (16 << es) - immhb, es, opc & 1, q if not scalar else 0, scalar)
+        if opc in (0x12, 0x13) and es < 3:                # SQSHRN/SQRSHRN or UQSHRN/UQRSHRN (+2)
+            return 'v_sat_shift_narrow(%s, %s, %d, %d, %d, %d, %d, %d);' % (
+                V(rd), V(rn), (16 << es) - immhb, es, 1 if u else 0, opc & 1,
+                q if not scalar else 0, scalar)
         raise Unimpl('simd-shift')
 
 
