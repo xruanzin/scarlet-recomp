@@ -249,9 +249,30 @@ def main(outdir, jobs):
     env = Env()
     env.imports = set()
     env.full = True
-    starts = sorted(a for a in (set(env.compute_starts()) | set(info['starts']))
+    starts_set = set(env.compute_starts()) | set(info['starts'])
+
+    # Belt-and-suspenders for Scarlet late indirect targets: merge the
+    # environment list here as well, independently of Env.compute_starts().
+    # This makes the EH lifter itself authoritative and lets us verify that a
+    # boot-discovered target really reaches table.c.
+    late_starts = set()
+    raw_late = os.environ.get('RECOMP_EXTRA_STARTS', '')
+    for tok in __import__('re').split(r'[\s,;]+', raw_late.strip()):
+        if not tok:
+            continue
+        v = int(tok, 0)
+        a = v if v >= BASE else BASE + v
+        if not (BASE + recomp.MODULE_HEADER_END <= a < BASE + TEXT_SIZE and a % 4 == 0):
+            raise SystemExit('late indirect target outside %s text: %#x' % (MODULE, v))
+        late_starts.add(a)
+    starts_set |= late_starts
+
+    starts = sorted(a for a in starts_set
                     if BASE + recomp.MODULE_HEADER_END <= a < BASE + TEXT_SIZE)
     env.starts = starts
+    if late_starts:
+        print('late indirect targets forced into %s: %s' %
+              (MODULE, ', '.join('%#x' % a for a in sorted(late_starts))))
     print('function entries: %d  (%.0fs)' % (len(starts), time.time() - t0))
     os.makedirs(outdir, exist_ok=True)
     known = set(starts)
@@ -339,6 +360,12 @@ def main(outdir, jobs):
             print('  %-20s %8d' % (reason, count))
     print('resume entries: %d landing pads (%d pads of the tables are in no lifted function), %d functions through nro_catch_call'
           % (len(resume), len(missing), len(catchers)))
+    missing_late = sorted(late_starts - set(all_funcs))
+    if missing_late:
+        raise SystemExit('FATAL: late indirect targets missing from generated function table: ' +
+                         ', '.join('%#x' % a for a in missing_late))
+    if late_starts:
+        print('late indirect target verification: OK (%d present in table.c)' % len(late_starts))
 
 
 if __name__ == '__main__':
