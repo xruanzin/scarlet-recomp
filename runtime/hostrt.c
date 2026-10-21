@@ -806,6 +806,10 @@ static int32_t g_scarlet_main_core = 0;
 static uint64_t g_scarlet_main_core_mask = 0xFULL;
 static uint64_t g_scarlet_main_tid = 0x50ULL;
 #define SCARLET_PSEUDO_THREAD 0xFFFF8000u
+extern uint32_t scarlet_main_thread_handle(void);
+static int scarlet_is_main_thread_handle(uint32_t h) {
+    return h == SCARLET_PSEUDO_THREAD || h == scarlet_main_thread_handle();
+}
 
 static uint64_t scarlet_rng64(void) {
     LARGE_INTEGER q;
@@ -956,7 +960,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x0C: { /* GetThreadPriority(_, handle) */
         uint32_t h = (uint32_t)x[1];
-        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        if (!scarlet_is_main_thread_handle(h)) return 0;
         x[0] = 0;
         x[1] = (uint64_t)(uint32_t)g_scarlet_main_prio;
         trace_printf("Scarlet GetThreadPriority(current) -> %d\n", g_scarlet_main_prio);
@@ -964,7 +968,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x0D: { /* SetThreadPriority(handle, priority) */
         uint32_t h = (uint32_t)x[0];
-        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        if (!scarlet_is_main_thread_handle(h)) return 0;
         g_scarlet_main_prio = (int32_t)x[1];
         x[0] = 0;
         trace_printf("Scarlet SetThreadPriority(current,%d)\n", g_scarlet_main_prio);
@@ -972,7 +976,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x0E: { /* GetThreadCoreMask(_, _, handle) */
         uint32_t h = (uint32_t)x[2];
-        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        if (!scarlet_is_main_thread_handle(h)) return 0;
         x[0] = 0;
         x[1] = (uint64_t)(uint32_t)g_scarlet_main_core;
         x[2] = g_scarlet_main_core_mask;
@@ -982,7 +986,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x0F: { /* SetThreadCoreMask(handle, ideal, mask) */
         uint32_t h = (uint32_t)x[0];
-        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        if (!scarlet_is_main_thread_handle(h)) return 0;
         int32_t ideal = (int32_t)x[1];
         uint64_t mask = x[2];
         if (ideal == -2) { /* IdealCoreUseDefaultValue */
@@ -1053,7 +1057,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
         x[0] = 0; x[1] = 0x81; return 1;
     case 0x25: { /* GetThreadId(_, handle) */
         uint32_t h = (uint32_t)x[1];
-        if (h != SCARLET_PSEUDO_THREAD) return 0;
+        if (!scarlet_is_main_thread_handle(h)) return 0;
         x[0] = 0;
         x[1] = g_scarlet_main_tid;
         trace_printf("Scarlet GetThreadId(current) -> %llx\n",
