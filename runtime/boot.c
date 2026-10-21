@@ -371,15 +371,24 @@ static DWORD WINAPI guest_main(LPVOID arg) {
     uint8_t *stack = stack_res ? VirtualAlloc(stack_res + 0x10000, stack_size, MEM_COMMIT, PAGE_READWRITE) : NULL;
     if (!stack) { fprintf(stderr, "cannot allocate the main thread's stack (0x%llx bytes)\n", (unsigned long long)stack_size); exit(1); }
     uint8_t *tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#ifdef SCARLET_RECOMP
+    uint8_t *tlr = VirtualAlloc(NULL, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!tls || !tlr) { fprintf(stderr, "cannot allocate Scarlet main TLS/TLR\n"); exit(1); }
+#else
+    if (!tls) { fprintf(stderr, "cannot allocate main TLS\n"); exit(1); }
+#endif
     c.x[31] = (uint64_t)(stack + stack_size);          /* the initial SP is the top of the stack (16-byte aligned: the size is whole pages) */
     c.tpidr = (uint64_t)tls;
 #ifdef SCARLET_RECOMP
-    /* Scarlet SDK 16 reloads TPIDR_EL0 from the thread-local-region slot at
-     * +0x1f0 during early nnmusl/allocator setup. Publish the bootstrap
-     * writable TLS pointer before any SDK constructor runs. */
-    memcpy(tls + 0x1f0, &c.tpidr, 8);
+    /* Horizon keeps TPIDR_EL0 (writable TLS) and TPIDRRO_EL0 (TLR / IPC)
+     * separate. TLR+0x1f0 points back to the writable TLS block. */
+    { extern void scarlet_set_tpidrro(Ctx *, uint64_t);
+      scarlet_set_tpidrro(&c, (uint64_t)tlr); }
+    memcpy(tlr + 0x1f0, &c.tpidr, 8);
+    { uint64_t os_main_thread_type(void); memcpy(tlr + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }
+#else
+    { uint64_t os_main_thread_type(void); memcpy(tls + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }
 #endif
-    { uint64_t os_main_thread_type(void); memcpy(tls + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }   /* [sdk 0x3349dc..e0] nn::os::detail::ThreadManager(): the main thread's ThreadType pointer */
     g_main_ctx = &c;
     { void module_coverage_start(Ctx *main_ctx); module_coverage_start(&c); }   /* nnro.c: SSBU_MODCOV=1 */
     { void os_apply_main_sched(void); os_apply_main_sched(); }                  /* os_threads.c: SSBU_OS_CONSOLE_CORES=1 */
