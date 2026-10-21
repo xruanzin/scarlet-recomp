@@ -159,11 +159,15 @@ def main(argv=None):
     write_if_changed(os.path.join(out, "table.c"), "\n".join(table))
 
     unresolved = {}
+    weak_unresolved = {}
+    strong_unresolved = {}
     ordered = {}
     if os.path.isfile(a.module_map):
         with open(a.module_map, encoding="utf-8") as f:
             mm = json.load(f)
         unresolved = mm.get("unresolved", {})
+        weak_unresolved = mm.get("weak_unresolved", {})
+        strong_unresolved = mm.get("strong_unresolved", {})
         for module, resolutions in mm.get("resolutions", {}).items():
             ordered[module] = {
                 name: target for name, target in resolutions.items()
@@ -179,9 +183,11 @@ def main(argv=None):
         "functions": len(all_funcs),
         "resume_entries": len(all_resume),
         "external_imports_pending_loader": unresolved,
+        "weak_unresolved_imports": weak_unresolved,
+        "strong_unresolved_imports": strong_unresolved,
         "load_order_resolutions": ordered,
         "runtime_ready": False,
-        "runtime_blocker": "multi-module ELF relocation/external import loader not integrated yet",
+        "runtime_blocker": "multi-module ELF relocation loader not integrated yet",
     }
     write_if_changed(
         os.path.join(out, "scarlet_combined_manifest.json"),
@@ -202,7 +208,10 @@ def main(argv=None):
     print("  combined functions: %d" % len(all_funcs))
     print("  combined EH resume entries: %d" % len(all_resume))
     print("  output: %s" % out)
-    print("  runtime-ready: NO (multi-module loader is the next stage)")
+    strong_total = sum(len(v) for v in strong_unresolved.values()) if strong_unresolved else 0
+    weak_total = sum(len(v) for v in weak_unresolved.values()) if weak_unresolved else 0
+    print("  unresolved imports: strong=%d weak=%d" % (strong_total, weak_total))
+    print("  runtime-ready: NO (multi-module ELF relocation loader is the next stage)")
     return 0
 
 
