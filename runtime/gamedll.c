@@ -44,6 +44,7 @@ void *sdk_longjmp_target(Ctx *c);
  * (skyline.c, included by nnro.c). */
 void sky_site_inline(Ctx *c, uint64_t addr);
 int sky_site_midhook(Ctx *c, uint64_t addr);
+uint64_t guest_tpidrro(Ctx *c);
 
 #undef fn_table
 #undef fn_table_count
