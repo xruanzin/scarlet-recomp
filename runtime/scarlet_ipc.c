@@ -429,7 +429,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             *(uint32_t *)out_data = 1;
             out_ptr = out_data; data_size = 0x10;
         } else if (service == SERVICE_HID) {
-            /* Activate*/Set*/vibration commands are no-ops on a host with
+            /* Activate/Set/vibration commands are no-ops on a host with
              * input bridged outside Horizon HID, matching scarlet_pc. */
         } else if (service == SERVICE_HID_SYS) {
             memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
