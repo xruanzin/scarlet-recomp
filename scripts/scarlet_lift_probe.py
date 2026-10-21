@@ -51,6 +51,8 @@ def run_module(name, bin_dir, out_root, jobs):
     env["RECOMP_BIN"] = bin_dir
     env["RECOMP_MODULE"] = name
     env["RECOMP_BASE"] = hex(profile.MODULE_BASES[name])
+    if name == "sdk":
+        env["RECOMP_SCARLET_STDALLOC"] = "1"
     late = late_targets_for(name)
     if late:
         env["RECOMP_EXTRA_STARTS"] = ",".join(hex(x) for x in late)
@@ -89,7 +91,8 @@ def run_module(name, bin_dir, out_root, jobs):
             return {"module": name, "ok": False, "code": 98}
         print("verified late targets in %s/table.c: %s" %
               (name, ", ".join(hex(x) for x in late)), flush=True)
-    rev = getattr(profile, "LIFT_ABI_REV", "")
+    rev = getattr(profile, "LIFT_ABI_REV_BY_MODULE", {}).get(
+        name, getattr(profile, "LIFT_ABI_REV", ""))
     if rev:
         with open(os.path.join(out, ".scarlet_lift_rev"), "w", encoding="utf-8") as mf:
             mf.write(rev + "\n")
