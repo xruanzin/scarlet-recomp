@@ -985,9 +985,13 @@ def step_tables(cx):
 
 
 def step_lift(cx):
-    out = cx.run('lift', [sys.executable, 'recomp_eh.py', 'gen_eh_o2', str(cx.lift_jobs)])
+    # Reuse the ssbu-recomp EH-aware lifter against Scarlet's real main guest
+    # address. Later phases apply the same module abstraction to sdk/subsdk0.
+    env = cx.env(RECOMP_MODULE='main', RECOMP_BASE=hex(profile.MODULE_BASES['main']))
+    out = cx.run('lift', [sys.executable, 'recomp_eh.py', 'gen_eh_o2', str(cx.lift_jobs)], env=env)
     n = len([f for f in os.listdir(os.path.join(cx.work, 'gen_eh_o2')) if f.endswith('.c')])
-    say('  main lifted into gen_eh_o2: %d C files (%.0f MB)' % (n, disk_mb(os.path.join(cx.work, 'gen_eh_o2'))))
+    say('  Scarlet main lifted at %#x into gen_eh_o2: %d C files (%.0f MB)' %
+        (profile.MODULE_BASES['main'], n, disk_mb(os.path.join(cx.work, 'gen_eh_o2'))))
 
 
 def install_header(roots_text):

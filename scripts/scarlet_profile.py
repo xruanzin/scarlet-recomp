@@ -18,6 +18,11 @@ MAIN_BUILD_ID_PREFIX = MAIN_BUILD_ID[:16]
 
 # Scarlet's static ExeFS code modules that scarlet_pc already recompiles.
 STATIC_MODULES = ("main", "sdk", "subsdk0")
+MODULE_BASES = {
+    "main": 0x7000000000,
+    "sdk": 0x7006000000,
+    "subsdk0": 0x7008000000,
+}
 REQUIRED_EXEFS = ("main", "main.npdm", "rtld", "sdk", "subsdk0")
 
 WINDOWS_EXE = "ScarletRecomp.exe"

@@ -1,8 +1,8 @@
-"""Prototype static recompiler: AArch64 (SSBU 13.0.4 main) -> C.
+"""Static recompiler core: AArch64 Switch module -> C.
 
 Feasibility study, not a product. Every guest function becomes a C function
 `void f_<addr>(Ctx *c)` working on a register context; guest memory is mapped
-at its real address (0x7100000000), so guest pointers are host pointers.
+at its configured guest address, so guest pointers can remain host-addressable.
 
 Usage:
     python recomp.py lift  <out.c> <root_addr>[,<root_addr>...]   lift roots and their callees
@@ -13,8 +13,17 @@ import struct
 import sys
 import collections
 
-ELF = os.path.join(os.environ['RECOMP_BIN'], 'main.elf') if os.environ.get('RECOMP_BIN') else r'..\binaries\13.0.4\main.elf'   # RECOMP_BIN: scripts/setup.py
-BASE = 0x7100000000
+# Target selection. The original ssbu-recomp defaults are preserved so the
+# upstream lifter can still be compared directly, while game ports select a
+# module/base through the environment.
+MODULE = os.environ.get('RECOMP_MODULE', 'main')
+if os.environ.get('RECOMP_ELF'):
+    ELF = os.environ['RECOMP_ELF']
+elif os.environ.get('RECOMP_BIN'):
+    ELF = os.path.join(os.environ['RECOMP_BIN'], MODULE + '.elf')
+else:
+    ELF = os.path.join('..', 'binaries', '13.0.4', MODULE + '.elf')
+BASE = int(os.environ.get('RECOMP_BASE', '0x7100000000'), 0)
 FILE_OFF = 0x1000
 
 IMG = open(ELF, 'rb').read()
