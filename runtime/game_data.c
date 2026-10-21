@@ -49,8 +49,15 @@ __declspec(dllexport) void game_data_bind(const GameDataHost *h, GameData *d) {
     d->sdk_fn_n = sdk_fn_count;
     d->sdk_host_name_tab = sdk_host_names;
     d->sdk_host_name_n = sdk_host_name_count;
+#ifdef SCARLET_RECOMP
+    d->eh_vec_tab = NULL;
+    d->eh_vec_n = 0;
+    d->eh_fn_vec_tab = NULL;
+    d->eh_fn_vec_n = 0;
+#else
     d->eh_vec_tab = eh_vecs;
     d->eh_vec_n = (int)(sizeof eh_vecs / sizeof eh_vecs[0]);
     d->eh_fn_vec_tab = eh_fn_vecs;
     d->eh_fn_vec_n = (int)(sizeof eh_fn_vecs / sizeof eh_fn_vecs[0]);
+#endif
 }
