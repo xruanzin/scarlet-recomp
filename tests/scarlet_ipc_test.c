@@ -83,9 +83,12 @@ int main(void) {
     cmif(4, 20); send_request(proxy); uint32_t appfn = msg[3]; assert(appfn);
     cmif(4, 22); msg[1] = 9; msg[8] = 0; send_request(appfn); assert(msg[6] == 0);
     cmif(4, 20); send_request(appfn); assert(msg[6] == 0 && msg[8] == 0);
-    cmif(4, 21); send_request(appfn); assert(msg[6] == 0);
-    cmif(4, 23); send_request(appfn); assert(msg[6] == 0);
-    cmif(4, 40); send_request(appfn); assert(msg[6] == 0);
+    cmif(4, 21); send_request(appfn);
+    assert(msg[6] == 0 && !memcmp(&msg[8], "pt-BR", 5));
+    cmif(4, 23); send_request(appfn);
+    assert(msg[6] == 0 && !memcmp(&msg[8], "1.0.0", 5));
+    cmif(4, 40); send_request(appfn);
+    assert(msg[6] == 0 && (msg[8] & 0xffu) == 0);
     ctx.x[0] = appfn; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = proxy; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
     ctx.x[0] = applet; assert(scarlet_ipc_svc(&ctx, 0x16) && ctx.x[0] == 0);
