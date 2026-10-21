@@ -11,7 +11,7 @@ typedef struct {
     Ctx ctx;
     uint64_t entry, id, mask;
     int priority, core, started, refs;
-    void *tls;
+    void *tls, *tlr;
     HANDLE host, done;
     jmp_buf exit_target;
 } ScarletThread;
@@ -29,6 +29,8 @@ static void release_thread(ScarletThread *t) {
     if (t->host) CloseHandle(t->host);
     if (t->done) CloseHandle(t->done);
     if (t->tls) VirtualFree(t->tls, 0, MEM_RELEASE);
+    if (t->tlr) VirtualFree(t->tlr, 0, MEM_RELEASE);
+    { extern void scarlet_clear_tpidrro(Ctx *); scarlet_clear_tpidrro(&t->ctx); }
     free(t);
 }
 static DWORD WINAPI run_thread(void *arg) {
@@ -82,13 +84,16 @@ int scarlet_thread_svc(Ctx *c, uint32_t n) {
                 t->priority = priority; t->core = core == -2 ? 0 : core; t->mask = 1ULL << t->core;
                 t->id = next_id++;
                 t->tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                t->tlr = VirtualAlloc(NULL, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
                 t->done = CreateEventW(NULL, TRUE, FALSE, NULL);
-                if (!t->tls || !t->done) { release_thread(t); t = NULL; }
+                if (!t->tls || !t->tlr || !t->done) { release_thread(t); t = NULL; }
             }
             if (!t) { x[0] = 0xd201; x[1] = 0; }
             else {
                 t->ctx.tpidr = (uintptr_t)t->tls;
-                memcpy((char *)t->tls + 0x1f0, &t->ctx.tpidr, 8);
+                { extern void scarlet_set_tpidrro(Ctx *, uint64_t);
+                  scarlet_set_tpidrro(&t->ctx, (uintptr_t)t->tlr); }
+                memcpy((char *)t->tlr + 0x1f0, &t->ctx.tpidr, 8);
                 threads[slot] = t; x[0] = 0; x[1] = THREAD_BASE + slot;
                 trace_printf("Scarlet CreateThread %x entry=%llx arg=%llx stack=%llx priority=%d core=%d\n",
                     (unsigned)x[1], (unsigned long long)t->entry, (unsigned long long)t->ctx.x[0],
