@@ -129,7 +129,7 @@ static inline void v_f3e(V128 *d, const V128 *pn, const V128 *pm, int idx, int o
     v_f3v(d, pn, &b, op, dbl, n);
 }
 
-enum { F1_ABS, F1_NEG, F1_SQRT, F1_RSQRTE, F1_RECPE, F1_SCVTF, F1_UCVTF, F1_CVTZS, F1_CVTZU,
+enum { F1_ABS, F1_NEG, F1_SQRT, F1_RSQRTE, F1_RECPE, F1_SCVTF, F1_UCVTF, F1_CVTZS, F1_CVTZU, F1_CVTAS,
        F1_CMEQ0, F1_CMGT0, F1_CMGE0, F1_CMLT0, F1_CMLE0, F1_FRINTM, F1_FRINTZ };
 
 static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
@@ -148,6 +148,7 @@ static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
             case F1_UCVTF: r.df[i] = (double)a.d[i]; break;
             case F1_CVTZS: r.d[i] = f2s64(trunc(x)); break;
             case F1_CVTZU: r.d[i] = f2u64(trunc(x)); break;
+            case F1_CVTAS: r.d[i] = f2s64(round(x)); break;
             case F1_CMEQ0: r.d[i] = x == 0 ? ~0ull : 0; break;
             case F1_CMGT0: r.d[i] = x > 0 ? ~0ull : 0; break;
             case F1_CMGE0: r.d[i] = x >= 0 ? ~0ull : 0; break;
@@ -168,6 +169,7 @@ static inline void v_f1v(V128 *d, const V128 *pn, int op, int dbl, int n) {
             case F1_UCVTF: r.f[i] = (float)a.w[i]; break;
             case F1_CVTZS: r.w[i] = f2s32(trunc((double)x)); break;
             case F1_CVTZU: r.w[i] = f2u32(trunc((double)x)); break;
+            case F1_CVTAS: r.w[i] = f2s32(round((double)x)); break;
             case F1_CMEQ0: r.w[i] = x == 0 ? ~0u : 0; break;
             case F1_CMGT0: r.w[i] = x > 0 ? ~0u : 0; break;
             case F1_CMGE0: r.w[i] = x >= 0 ? ~0u : 0; break;
@@ -205,7 +207,7 @@ static inline void v_i3v(V128 *d, const V128 *pn, const V128 *pm, int op, int sz
     *d = r;
 }
 
-enum { I1_NOT, I1_NEG, I1_ABS, I1_CMEQ0, I1_REV64, I1_CNT };
+enum { I1_NOT, I1_NEG, I1_ABS, I1_CMEQ0, I1_REV64, I1_REV16, I1_CNT };
 
 static inline void v_i1v(V128 *d, const V128 *pn, int op, int sz, int n) {
     V128 a = *pn, r;
@@ -753,6 +755,58 @@ static inline void v_fcvtn(V128 *d, const V128 *pn, int dbl, int upper) {
     r.d[1] = 0;
     if (dbl) for (int i = 0; i < 2; i++) r.f[i + 2 * upper] = (float)a.df[i];
     else for (int i = 0; i < 4; i++) r.h[i + 4 * upper] = f32_to_half(a.f[i]);
+    *d = r;
+}
+
+/* FCVTZS/FCVTZU vector fixed-point forms: multiply FP lanes by 2^fbits
+ * and convert toward zero into same-width signed/unsigned integer lanes. */
+static inline void v_fcvt_fixed(V128 *d, const V128 *pn, int dbl, int n,
+                                int fbits, int is_unsigned) {
+    V128 a = *pn, r; r.d[0] = 0; r.d[1] = 0;
+    if (dbl) {
+        double scale = ldexp(1.0, fbits);
+        for (int i = 0; i < n; i++) {
+            double x = trunc(a.df[i] * scale);
+            r.d[i] = is_unsigned ? f2u64(x) : (uint64_t)f2s64(x);
+        }
+    } else {
+        double scale = ldexp(1.0, fbits);
+        for (int i = 0; i < n; i++) {
+            double x = trunc((double)a.f[i] * scale);
+            r.w[i] = is_unsigned ? f2u32(x) : (uint32_t)f2s32(x);
+        }
+    }
+    *d = r;
+}
+
+static inline void v_sat_narrow_scalar(V128 *d, const V128 *pn, int dst_sz, int mode) {
+    V128 a = *pn, r; r.d[0] = 0; r.d[1] = 0;
+    int dbits = 8 << dst_sz;
+    uint64_t raw = vget(&a, dst_sz + 1, 0), z;
+    if (mode == 0) z = (uint64_t)v_sat_s((__int128)vsext(raw, dst_sz + 1), dbits);
+    else if (mode == 1) z = v_sat_u((__int128)(unsigned __int128)raw, dbits);
+    else z = v_sat_u((__int128)vsext(raw, dst_sz + 1), dbits);
+    vset(&r, dst_sz, 0, z);
+    *d = r;
+}
+
+static inline void v_long3_elem(V128 *d, const V128 *pn, const V128 *pm,
+                                int idx, int op, int sz, int is_unsigned,
+                                int upper) {
+    V128 a = *pn, b = *pm, old = *d, r; r.d[0] = 0; r.d[1] = 0;
+    int n = 8 >> sz;
+    uint64_t ev = vget(&b, sz, idx);
+    __int128 y = is_unsigned ? (__int128)(unsigned __int128)ev : (__int128)vsext(ev, sz);
+    for (int i = 0; i < n; i++) {
+        int j = i + (upper ? n : 0);
+        uint64_t av = vget(&a, sz, j);
+        __int128 x = is_unsigned ? (__int128)(unsigned __int128)av : (__int128)vsext(av, sz);
+        __int128 z;
+        if (op == VL_MLAL) z = (__int128)vget(&old, sz + 1, i) + x * y;
+        else if (op == VL_MLSL) z = (__int128)vget(&old, sz + 1, i) - x * y;
+        else z = x * y;
+        vset(&r, sz + 1, i, (uint64_t)z);
+    }
     *d = r;
 }
 
