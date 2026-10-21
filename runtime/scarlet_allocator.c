@@ -76,6 +76,8 @@ static int ensure_committed(uint64_t end) {
         return 0;
     }
     g_committed = want;
+    { extern void scarlet_heap_note_committed(uint64_t);
+      scarlet_heap_note_committed(g_committed); }
     return 1;
 }
 static Rec *find_rec(uint64_t addr, Rec ***pp_out) {
