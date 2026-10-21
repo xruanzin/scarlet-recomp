@@ -109,6 +109,8 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
     if (!tipc && !domain_close && in[0] != 0x49434653) return 0xf601; /* malformed CMIF */
     uint32_t cmd = domain_close ? 0 : tipc ? type - 16 : in[2], result = 0, moved = 0, copied = 0;
     uint64_t value = 0;
+    unsigned char out_data[64] = {0};
+    const void *out_ptr = &value;
     uint32_t *data = tipc ? msg + off : in + 4;
     size_t input_size = domain_close ? 0 : tipc ? words * 4 : (raw_end - aligned - 4) * 4;
     size_t data_size = 0;
@@ -181,25 +183,26 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
              * no additional system-save allocation is required here. */
             value = 0; data_size = 8;
         } else if (service == SERVICE_APPLICATION && cmd == 21) {
-            /* GetDesiredLanguage. nn::settings language code is an 8-byte
-             * packed ASCII string; use pt-BR for this host/user profile. */
+            /* GetDesiredLanguage: 8-byte packed nn::settings language code. */
             value = 0;
             memcpy(&value, "pt-BR", 5);
             data_size = 8;
         } else if (service == SERVICE_APPLICATION && cmd == 22) {
-            /* SetTerminateResult(Result): the application reports its eventual
-             * exit result to AM. Record it only in the trace; boot continues. */
+            /* SetTerminateResult(Result): store/log only, no output payload. */
             uint32_t terminate_result = input_size >= 4 ? data[0] : 0;
             trace_printf("Scarlet SetTerminateResult(%08x)\n", terminate_result);
         } else if (service == SERVICE_APPLICATION && cmd == 23) {
-            /* GetDisplayVersion is 16 bytes in Horizon. The bootstrap only
-             * needs a valid version string; the response writer below currently
-             * supports scalar payloads, so return the first 8 bytes ("1.0.0"). */
-            value = 0;
-            memcpy(&value, "1.0.0", 5);
-            data_size = 8;
+            /* GetDisplayVersion returns exactly 0x10 bytes. */
+            memcpy(out_data, "1.0.0", 5);
+            out_ptr = out_data;
+            data_size = 0x10;
         } else if (service == SERVICE_APPLICATION && cmd == 40) {
-            /* NotifyRunning has no output payload. */
+            /* NotifyRunning -> bool/u8 restart requested. False for normal boot.
+             * Responses are word-aligned on the wire, but only the first byte
+             * belongs to the value. */
+            out_data[0] = 0;
+            out_ptr = out_data;
+            data_size = 4;
         } else if (service == SERVICE_COMMON && cmd == 900) {
             request_exit_on_next_program = 1;
         } else if (service == SERVICE_COMMON && cmd == 0) {
@@ -319,7 +322,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
         if (moved) { msg[1] |= 0x80000000u; msg[2] = 1u << 5; msg[3] = moved; }
         if (copied) { msg[1] |= 0x80000000u; msg[2] = 1u << 1; msg[3] = copied; }
         msg[pos] = result;
-        if (data_size) memcpy(msg + pos + 1, &value, data_size);
+        if (data_size) memcpy(msg + pos + 1, out_ptr, data_size);
         return 0;
     }
     uint32_t domain_out = 0;
@@ -340,7 +343,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
     if (copied) { msg[1] |= 0x80000000u; msg[2] = 1u << 1; msg[3] = copied; }
     if (domain_request) { msg[out_off] = domain_out ? 1 : 0; out_off += 4; }
     msg[out_off] = 0x4f434653; msg[out_off + 2] = result;
-    if (data_size) memcpy(msg + out_off + 4, &value, data_size);
+    if (data_size) memcpy(msg + out_off + 4, out_ptr, data_size);
     if (domain_out) msg[out_off + 4 + data_size / 4] = domain_out;
     return 0;
 unsupported:
