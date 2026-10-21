@@ -268,6 +268,17 @@ int sdk_missing_host_callees(FILE *out) {
 }
 
 void register_sdklift_imports(void) {
+#ifdef SCARLET_RECOMP
+    /* Scarlet already maps and relocates the complete sdk.elf at 0x7006000000
+     * through scarlet_loader.c, and its sdk code is part of the combined static
+     * recompilation. The SSBU selective sdklift image at SDK_BASE (0x7500...)
+     * must not be mapped a second time. Keep g_ready false so old host helpers
+     * that specifically require selective sdklift roots stay disabled. */
+    g_ready = 0;
+    g_host_fn = calloc(1, sizeof *g_host_fn);
+    trace_printf("sdklift: disabled for Scarlet (full sdk.elf is statically mapped/lifted)\n");
+    return;
+#else
     g_host_fn = calloc((size_t)sdk_host_name_count + 1, sizeof *g_host_fn);
     g_ready = load_image();
     if (!g_ready) return;
@@ -285,4 +296,5 @@ void register_sdklift_imports(void) {
         installed += sdk_install(name);
     }
     trace_printf("sdklift: %d SDK functions lifted, %d installed as import handlers, %d host callees\n", sdk_fn_count, installed, sdk_host_name_count);
+#endif
 }
