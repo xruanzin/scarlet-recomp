@@ -1051,13 +1051,13 @@ def inline_flag(cx):
 def build_env(cx):
     if cx.linux:
         return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL=game_lib(cx), RECOMP_NRO_SUFFIX='_eh_o2', RECOMP_TARGET='linux', RECOMP_INLINE=inline_flag(cx),
-                      RECOMP_LIFT_JOBS=str(cx.lift_jobs))
+                      RECOMP_SCARLET='1', RECOMP_LIFT_JOBS=str(cx.lift_jobs))
     if cx.mac:
         return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL=game_lib(cx), RECOMP_NRO_SUFFIX='_eh_o2', RECOMP_TARGET='macos', RECOMP_INLINE=inline_flag(cx),
-                      RECOMP_LIFT_JOBS=str(cx.lift_jobs))
+                      RECOMP_SCARLET='1', RECOMP_LIFT_JOBS=str(cx.lift_jobs))
     # FFMPEG_ROOT: build.py compiles the movie fallback (mf_ffmpeg.c) with the headers install.py put in deps\ffmpeg
     return cx.env(RECOMP_GEN='gen_eh_o2', RECOMP_OBJ='obj_eh_o1', RECOMP_DLL=game_lib(cx), RECOMP_NRO_SUFFIX='_eh_o2',
-                  RECOMP_INLINE=inline_flag(cx),
+                  RECOMP_INLINE=inline_flag(cx), RECOMP_SCARLET='1',
                   FFMPEG_ROOT=os.environ.get('FFMPEG_ROOT') or os.path.join(REPO, 'deps', 'ffmpeg'))
 
 
