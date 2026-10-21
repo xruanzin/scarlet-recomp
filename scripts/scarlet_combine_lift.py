@@ -195,8 +195,9 @@ def main(argv=None):
         "strong_unresolved_imports": strong_unresolved,
         "load_order_resolutions": ordered,
         "dyn_syms": "main-only; sdk/subsdk0 relocations are loader-owned",
-        "runtime_ready": False,
-        "runtime_blocker": "multi-module ELF relocation loader not integrated yet",
+        "runtime_ready": True,
+        "runtime_blocker": None,
+        "static_loader": "runtime/scarlet_loader.c",
     }
     write_if_changed(
         os.path.join(out, "scarlet_combined_manifest.json"),
@@ -220,7 +221,7 @@ def main(argv=None):
     strong_total = sum(len(v) for v in strong_unresolved.values()) if strong_unresolved else 0
     weak_total = sum(len(v) for v in weak_unresolved.values()) if weak_unresolved else 0
     print("  unresolved imports: strong=%d weak=%d" % (strong_total, weak_total))
-    print("  runtime-ready: NO (multi-module ELF relocation loader is the next stage)")
+    print("  runtime-ready: YES (multi-module Scarlet static loader integrated)")
     return 0
 
 
