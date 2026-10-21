@@ -54,6 +54,16 @@ int main(void) {
     /* User-buffer variant is bounded by x1, including the debug/header read. */
     ctx.x[0] = (uintptr_t)msg; ctx.x[1] = 4; ctx.x[2] = clone;
     scarlet_ipc_svc(&ctx, 0x22); assert(ctx.x[0] == R_INVALID_SIZE);
+    uint32_t aoc = service(sm, "aoc:u");
+    cmif(4, 2); send_request(aoc); assert(msg[8] == 0); /* CountAddOnContent */
+    cmif(4, 5); send_request(aoc);
+    assert(((uint64_t)msg[8] | ((uint64_t)msg[9] << 32)) == 0x0100A3D008C5D000ULL);
+    cmif(4, 8); send_request(aoc); assert(msg[1] & 0x80000000u); /* change event */
+    uint32_t aoc_event = msg[3];
+    ctx.x[1] = (uintptr_t)&aoc_event; ctx.x[2] = 1; ctx.x[3] = 0;
+    scarlet_ipc_svc(&ctx, 0x18); assert(ctx.x[0] == 0xea01);
+    ctx.x[0] = aoc_event; scarlet_ipc_svc(&ctx, 0x16); assert(ctx.x[0] == 0);
+
     uint32_t apm = service(sm, "apm");
     cmif(4, 0); send_request(apm); uint32_t apm_session = msg[3];
     cmif(4, 0); msg[1] = 10; msg[8] = 1; msg[9] = 0x92220008; send_request(apm_session);
@@ -76,6 +86,6 @@ int main(void) {
     ctx.x[0] = e; scarlet_ipc_svc(&ctx, 0x16); assert(ctx.x[0] == 0);
     ctx.x[1] = (uintptr_t)&e; ctx.x[2] = 1; ctx.x[3] = 0;
     scarlet_ipc_svc(&ctx, 0x18); assert(ctx.x[0] == R_INVALID_HANDLE);
-    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, APM, close and event SVC tests passed");
+    puts("Scarlet IPC: TIPC, CMIF, domains, bounds, AOC, APM, close and event SVC tests passed");
     return 0;
 }
