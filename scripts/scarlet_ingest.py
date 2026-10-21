@@ -22,6 +22,40 @@ class IngestError(RuntimeError):
     pass
 
 
+def _can_import_lz4(python):
+    try:
+        p = subprocess.run(
+            [python, "-c", "import lz4.block"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return p.returncode == 0
+    except OSError:
+        return False
+
+
+def converter_python():
+    """Return a Python that has the converter dependency lz4.
+
+    Prefer the current interpreter when it is ready. On Windows, fall back to
+    ssbu-recomp's private deps/python environment prepared by bootstrap.ps1.
+    """
+    if _can_import_lz4(sys.executable):
+        return sys.executable
+
+    private = os.path.join(REPO, "deps", "python", "python.exe")
+    if os.path.isfile(private) and _can_import_lz4(private):
+        return private
+
+    raise IngestError(
+        "Python dependency 'lz4' is not prepared. Run once:\n"
+        "  powershell.exe -NoProfile -ExecutionPolicy Bypass "
+        "-File scripts\\bootstrap.ps1 -NoLaunch\n"
+        "Then run this Scarlet ingestion command again. The script will "
+        "automatically use deps\\python\\python.exe."
+    )
+
+
 def find_exefs(path):
     path = os.path.abspath(path)
     if os.path.basename(path).lower() == "exefs":
@@ -47,12 +81,12 @@ def require_inputs(exefs):
         raise IngestError("missing ExeFS file(s): %s" % ", ".join(missing))
 
 
-def convert_one(name, exefs, out_dir):
+def convert_one(name, exefs, out_dir, python):
     converter = os.path.join(REPO, "tools", "extract", "nso2elf.py")
     src = os.path.join(exefs, name)
     dst = os.path.join(out_dir, name + ".elf")
     p = subprocess.run(
-        [sys.executable, converter, src, dst],
+        [python, converter, src, dst],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -97,9 +131,13 @@ def main(argv=None):
     print("  version: %s" % profile.BASE_VERSION)
     print("  main ID: %s" % main_bid)
 
+    python = converter_python()
+    if os.path.normcase(os.path.abspath(python)) != os.path.normcase(os.path.abspath(sys.executable)):
+        print("  Python:  %s (private project environment)" % python)
+
     converted = []
     for name in profile.STATIC_MODULES:
-        dst, build_id, log = convert_one(name, exefs, out_dir)
+        dst, build_id, log = convert_one(name, exefs, out_dir, python)
         converted.append((name, dst, build_id))
         seg = next((line for line in log.splitlines() if line.startswith("seg 0 ")), "")
         print("  %-7s build %-16s  %s" % (name, build_id[:16], seg or "converted"))
