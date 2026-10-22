@@ -97,10 +97,6 @@ SCARLET_THREAD_SYMBOLS = {
 }
 
 def _scarlet_thread_overrides():
-    # Known-good Scarlet bootstrap (7cafc2b) uses the original static SDK
-    # thread/synchronization lifecycle. HLE-replacing it regressed TLS values
-    # into low module-relative pointers during graphics initialization.
-    return {}
     if os.environ.get("RECOMP_SCARLET_THREADS", "") in ("", "0"):
         return {}
     out = {}

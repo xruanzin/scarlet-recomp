@@ -218,8 +218,25 @@ static __attribute__((noinline)) void *thread_fiber(void) {
     if (!t_thread_fiber) t_thread_fiber = ConvertThreadToFiber(NULL);
     return t_thread_fiber;
 }
+#ifdef SCARLET_RECOMP
+static uint64_t g_main_thread_key;
+uint64_t os_main_thread_type(void) {
+    if (!g_main_thread_key) {
+        extern void *scarlet_guest_alloc(size_t);
+        void *p = scarlet_guest_alloc(0x400);
+        if (!p) guest_trap("Scarlet main ThreadType guest allocation failed", 0x400);
+        g_main_thread_key = (uint64_t)(uintptr_t)p;
+        printf("Scarlet main ThreadType guest=%llx\n",
+               (unsigned long long)g_main_thread_key);
+        trace_printf("Scarlet main ThreadType guest=%llx\n",
+                     (unsigned long long)g_main_thread_key);
+    }
+    return g_main_thread_key;
+}
+#else
 static uint8_t g_main_thread[0x400];
 uint64_t os_main_thread_type(void) { return (uint64_t)(uintptr_t)g_main_thread; }
+#endif
 uint64_t g_main_stack_base, g_main_stack_size;        /* set by boot.c */
 static volatile LONG g_thread_count;
 
@@ -399,7 +416,11 @@ static void os_SetThreadName(Ctx *c) {               /* the guest string may be 
     obj(A0)->name = (uint64_t)(uintptr_t)copy;
 }
 static void os_GetCurrentThread(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    RET(scarlet_sdk_current_thread(c));
+#else
     RET(t_thread ? t_thread : os_main_thread_type());
+#endif
 }
 static Obj *thread_obj(uint64_t key);
 static void os_GetThreadPriority(Ctx *c) { RET((int64_t)thread_obj(A0 == os_main_thread_type() ? 0 : A0)->priority); }
@@ -485,13 +506,30 @@ static void os_AllocateTlsSlot(Ctx *c) {
 static void os_FreeTlsSlot(Ctx *c) { uint32_t i = (uint32_t)A0 & 63; g_tls_dtor[i] = 0; InterlockedExchange(&g_tls_used[i], 0); }
 static void tls_run_destructors(Ctx *c) {
     for (int i = 0; i < 64; i++) {
+#ifdef SCARLET_RECOMP
+        uint64_t v = scarlet_sdk_tls_value(c, (uint32_t)i), fn = g_tls_dtor[i];
+        scarlet_sdk_set_tls_value(c, (uint32_t)i, 0);
+#else
         uint64_t v = t_tls[i], fn = g_tls_dtor[i];
         t_tls[i] = 0;
+#endif
         if (v && fn && g_tls_used[i]) { c->x[0] = v; call_guest(c, fn); }
     }
 }
-static void os_GetTlsValue(Ctx *c) { RET(t_tls[A0 & 63]); }
-static void os_SetTlsValue(Ctx *c) { t_tls[A0 & 63] = A1; }
+static void os_GetTlsValue(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    RET(scarlet_sdk_tls_value(c, (uint32_t)A0));
+#else
+    RET(t_tls[A0 & 63]);
+#endif
+}
+static void os_SetTlsValue(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    scarlet_sdk_set_tls_value(c, (uint32_t)A0, A1);
+#else
+    t_tls[A0 & 63] = A1;
+#endif
+}
 
 /* ---------------------------------------------------------------- mutexes */
 static void mtx_init(Ctx *c) { (void)obj(A0); }
@@ -922,9 +960,24 @@ static void pt_create(Ctx *c) {
     if (!size) size = 1u << 20;
     if (size < (256u << 10)) size = 256u << 10;
     size = (size + 0xffff) & ~0xffffull;
+#ifdef SCARLET_RECOMP
+    extern void *scarlet_guest_alloc(size_t);
+    uint8_t *tt = (uint8_t *)scarlet_guest_alloc(0x400);
+#else
     uint8_t *tt = calloc(1, 0x400);
+#endif
+    /* pthread_t is guest-visible and the SDK dereferences ThreadType fields.
+     * On Scarlet it therefore must live in the guest VA window, never in the
+     * host CRT heap where ASLR addresses can escape/truncate in lifted code. */
     void *stack = VirtualAlloc(NULL, (SIZE_T)size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!tt || !stack) { free(tt); if (stack) VirtualFree(stack, 0, MEM_RELEASE); RET(P_EAGAIN); return; }
+    if (!tt || !stack) {
+#ifndef SCARLET_RECOMP
+        free(tt);
+#endif
+        if (stack) VirtualFree(stack, 0, MEM_RELEASE);
+        RET(P_EAGAIN);
+        return;
+    }
     Obj *o = obj((uint64_t)(uintptr_t)tt);
     o->fn = A2; o->arg = A3; o->stack = (uint64_t)(uintptr_t)stack; o->stack_size = size;
     o->priority = OS_DEFAULT_PRIORITY; o->ideal_core = OS_DEFAULT_CORE; o->core_mask = 1ull << OS_DEFAULT_CORE; o->core_set = 1;
