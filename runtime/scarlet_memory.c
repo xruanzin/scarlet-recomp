@@ -321,6 +321,8 @@ int scarlet_memory_svc(Ctx *c, uint32_t n) {
         c->x[0] = r; c->x[1] = r ? 0 : h;
         trace_printf("Scarlet CreateTransferMemory src=%llx size=%llx perm=%u -> %x result=%x\n",
                      (unsigned long long)src, (unsigned long long)size, perm, h, r);
+        printf("Scarlet CreateTransferMemory src=%llx size=%llx perm=%u -> handle=%x result=%x\n",
+               (unsigned long long)src, (unsigned long long)size, perm, h, r);
         return 1;
     }
     if (n == 0x51 || n == 0x52) { /* Map/UnmapTransferMemory(handle, addr, size[, perm]) */
