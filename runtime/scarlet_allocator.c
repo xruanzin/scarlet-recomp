@@ -171,6 +171,18 @@ static uint64_t alloc_locked(uint64_t size, uint64_t align) {
         free_insert(addr, cap);
         return 0;
     }
+    if (size >= 0x8000 || align >= 0x1000) {
+        MEMORY_BASIC_INFORMATION mi = {0};
+        VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi);
+        trace_printf("Scarlet StandardAllocator alloc addr=%llx size=%llx cap=%llx align=%llx committed_to=%llx host_state=%lx protect=%lx\n",
+                     (unsigned long long)addr, (unsigned long long)size,
+                     (unsigned long long)cap, (unsigned long long)align,
+                     (unsigned long long)g_committed,
+                     (unsigned long)mi.State, (unsigned long)mi.Protect);
+        printf("Scarlet StandardAllocator alloc addr=%llx size=%llx align=%llx committed_to=%llx\n",
+               (unsigned long long)addr, (unsigned long long)size,
+               (unsigned long long)align, (unsigned long long)g_committed);
+    }
     Rec *r = (Rec *)malloc(sizeof *r);
     if (!r) { free_insert(addr, cap); return 0; }
     r->addr = addr; r->size = size; r->capacity = cap; r->align = align;
