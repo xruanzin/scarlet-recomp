@@ -34,7 +34,8 @@ enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESS
        SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL,
        SERVICE_FSP, SERVICE_FSP_STORAGE, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
        SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS,
-       SERVICE_AUDREN, SERVICE_AUDREN_RENDERER, SERVICE_AUDREN_DEVICE };
+       SERVICE_AUDREN, SERVICE_AUDREN_RENDERER, SERVICE_AUDREN_DEVICE,
+       SERVICE_SET };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 static const unsigned char scarlet_clock_uuid[16] =
     {0x4c,0x41,0x52,0x65,0x63,0x6f,0x6d,0x70,1,2,3,4,5,6,7,8};
@@ -584,6 +585,57 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
              * input bridged outside Horizon HID, matching scarlet_pc. */
         } else if (service == SERVICE_HID_SYS) {
             memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
+        } else if (service == SERVICE_SET) {
+            /* nn::settings ISettingsServer. Keep the host locale deterministic
+             * during bootstrap; Scarlet only needs language/region metadata here.
+             * LanguageCode is the little-endian u64 representation used by Horizon
+             * ("en-US", "pt-BR", ...). */
+            static const uint64_t lang_codes[] = {
+                0x000000000000616aULL, /* ja */
+                0x00000053552d6e65ULL, /* en-US */
+                0x000000000072662ULL,  /* fr */
+                0x00000000006564ULL,   /* de */
+                0x00000000007469ULL,   /* it */
+                0x00000000007365ULL,   /* es */
+                0x0000004e432d687aULL, /* zh-CN */
+                0x00000000006f6bULL,   /* ko */
+                0x00000000006c6eULL,   /* nl */
+                0x00000000007470ULL,   /* pt */
+                0x00000000007572ULL,   /* ru */
+                0x00000057542d687aULL, /* zh-TW */
+                0x00000042472d6e65ULL, /* en-GB */
+                0x00000041432d7266ULL, /* fr-CA */
+                0x003931342d7365ULL,   /* es-419 */
+                0x736e61482d687aULL,   /* zh-Hans */
+                0x746e61482d687aULL,   /* zh-Hant */
+                0x00000052422d7470ULL  /* pt-BR */
+            };
+            if (cmd == 0) { /* GetLanguageCode */
+                value = lang_codes[1]; data_size = 8; /* en-US */
+            } else if (cmd == 2) { /* MakeLanguageCode(s32 language) */
+                uint32_t language = input_size >= 4 ? data[0] : 1;
+                value = language < (uint32_t)(sizeof lang_codes / sizeof lang_codes[0])
+                      ? lang_codes[language] : lang_codes[1];
+                data_size = 8;
+            } else if (cmd == 4) { /* GetRegionCode */
+                value = 1; data_size = 4; /* USA / Americas */
+            } else if (cmd == 5 || cmd == 1) { /* GetAvailableLanguageCodes */
+                uint32_t count = (uint32_t)(sizeof lang_codes / sizeof lang_codes[0]);
+                if (out_buf_addr && out_buf_size) {
+                    size_t n = sizeof lang_codes;
+                    if (n > out_buf_size) n = (size_t)out_buf_size;
+                    memcpy((void *)(uintptr_t)out_buf_addr, lang_codes, n);
+                    if (n / 8 < count) count = (uint32_t)(n / 8);
+                }
+                value = count; data_size = 4;
+            } else if (cmd == 6 || cmd == 3) { /* GetAvailableLanguageCodeCount */
+                value = (uint32_t)(sizeof lang_codes / sizeof lang_codes[0]);
+                data_size = 4;
+            } else if (cmd == 8) { /* GetQuestFlag */
+                out_data[0] = 0; out_ptr = out_data; data_size = 1;
+            } else {
+                goto unsupported;
+            }
         } else if (service == SERVICE_AUDREN) {
             /* IAudioRendererManager. Command layout follows Horizon/libnx:
              * 0 OpenAudioRenderer, 1 GetWorkBufferSize, 2/4 audio-device service. */
