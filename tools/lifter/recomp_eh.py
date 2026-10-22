@@ -78,6 +78,22 @@ SCARLET_THREAD_SYMBOLS = {
     "_ZN2nn2os24GetThreadCurrentPriorityEPKNS0_10ThreadTypeE": 9,
     "_ZN2nn2os20ChangeThreadPriorityEPNS0_10ThreadTypeEi": 10,
     "_ZN2nn2os11GetThreadIdEPKNS0_10ThreadTypeE": 11,
+
+    "_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi": 20,
+    "_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE": 21,
+    "_ZN2nn2os9LockMutexEPNS0_9MutexTypeE": 22,
+    "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE": 23,
+    "_ZN2nn2os12TryLockMutexEPNS0_9MutexTypeE": 24,
+    "_ZN2nn2os27InitializeConditionVariableEPNS0_21ConditionVariableTypeE": 25,
+    "_ZN2nn2os25FinalizeConditionVariableEPNS0_21ConditionVariableTypeE": 26,
+    "_ZN2nn2os21WaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeE": 27,
+    "_ZN2nn2os26TimedWaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeENS_8TimeSpanE": 28,
+    "_ZN2nn2os23SignalConditionVariableEPNS0_21ConditionVariableTypeE": 29,
+    "_ZN2nn2os26BroadcastConditionVariableEPNS0_21ConditionVariableTypeE": 30,
+
+    "_ZN2nn2os12SdkMutexType4LockEv": 22,
+    "_ZN2nn2os12SdkMutexType6UnlockEv": 23,
+    "_ZN2nn2os12SdkMutexType7TryLockEv": 24,
 }
 
 def _scarlet_thread_overrides():
