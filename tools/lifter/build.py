@@ -279,7 +279,18 @@ def compile_game_data(objdir, shim):
         name = '_shim' if os.path.basename(shim) == 'game_shim_eh.c' else '_shim_' + os.path.basename(shim)[:-2]
         obj = os.path.join(objdir, (name if src == shim else os.path.basename(src)[:-2]) + '.obj')
         objs.append(obj)
-        if not os.path.exists(obj) or os.path.getmtime(obj) < max(os.path.getmtime(src), newest_h):
+        src_mtime = os.path.getmtime(src)
+        if src == shim:
+            # game_shim_eh.c includes game_shim.c, and game_shim_r1.c includes
+            # game_shim_eh.c. Track those textual include dependencies too:
+            # otherwise an edit to the common host ABI leaves _shim.obj stale
+            # and the game DLL can keep reporting unresolved symbols even
+            # though the updated source was staged correctly.
+            for dep_name in ('game_shim.c', 'game_shim_eh.c'):
+                dep = os.path.join(HERE, dep_name)
+                if os.path.exists(dep):
+                    src_mtime = max(src_mtime, os.path.getmtime(dep))
+        if not os.path.exists(obj) or os.path.getmtime(obj) < max(src_mtime, newest_h):
             jobs.append([CLANG] + flags + [src, '-o', obj])
     failed = 0
     with concurrent.futures.ThreadPoolExecutor(8) as pool:
