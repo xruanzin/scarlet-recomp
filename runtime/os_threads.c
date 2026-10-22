@@ -227,8 +227,27 @@ static Ctx *new_ctx(uint64_t stack_top) {
     Ctx *c = _aligned_malloc(sizeof *c, 16);
     memset(c, 0, sizeof *c);
     c->x[31] = stack_top & ~15ull;
+#ifdef SCARLET_RECOMP
+    extern void *scarlet_guest_alloc(size_t);
+    extern void scarlet_set_tpidrro(Ctx *, uint64_t);
+    uint8_t *tls = scarlet_guest_alloc(0x10000);
+    uint8_t *tlr = scarlet_guest_alloc(0x1000);
+    if (!tls || !tlr) guest_trap("Scarlet thread TLS/TLR allocation failed", stack_top);
+    c->tpidr = (uint64_t)(uintptr_t)tls;
+    scarlet_set_tpidrro(c, (uint64_t)(uintptr_t)tlr);
+    wr64((uint64_t)(uintptr_t)tlr + 0x1f0, c->tpidr);
+#else
     c->tpidr = (uint64_t)VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#endif
     return c;
+}
+
+static void publish_thread_type(Ctx *c, uint64_t key) {
+#ifdef SCARLET_RECOMP
+    wr64(guest_tpidrro(c) + 0x1f8, key);
+#else
+    wr64(c->tpidr + 0x1f8, key);
+#endif
 }
 
 /* Every guest thread's context, so a report can say where each one is. */
@@ -287,7 +306,7 @@ static DWORD WINAPI thread_main(LPVOID arg) {
     t_thread = o->key;
     { void display_perf_thread(void); display_perf_thread(); }      /* track V session 14: the game's threads on the performance cores of a hybrid CPU (display.c; SSBU_PCORES=0 off) */
     Ctx *c = new_ctx(o->stack + o->stack_size);
-    wr64(c->tpidr + 0x1f8, o->key);                   /* Horizon thread-local region: the ThreadType pointer lives at +0x1f8 */
+    publish_thread_type(c, o->key);                   /* Horizon thread-local region: the ThreadType pointer lives at +0x1f8 */
     LONG slot = InterlockedIncrement(&g_threads_n) - 1;
     if (slot < 256) { g_threads[slot].o = o; g_threads[slot].c = c; }
     c->x[0] = o->arg;
@@ -894,7 +913,7 @@ static DWORD WINAPI pthread_main(LPVOID arg) {
     Obj *o = arg;
     t_thread = o->key;
     Ctx *c = new_ctx(o->stack + o->stack_size);
-    wr64(c->tpidr + 0x1f8, o->key);                   /* the ThreadType pointer, as for nn::os threads */
+    publish_thread_type(c, o->key);                   /* the ThreadType pointer, as for nn::os threads */
     LONG slot = InterlockedIncrement(&g_threads_n) - 1;
     if (slot < 256) { g_threads[slot].o = o; g_threads[slot].c = c; }
     c->x[0] = o->arg;
