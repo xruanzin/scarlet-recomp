@@ -287,13 +287,19 @@ def main():
                     with open(a.log, 'rb') as lf:
                         lf.seek(log_start)
                         run_text = lf.read().decode('utf-8', 'replace')
-                    markers = (
-                        'GUEST TRAP:', 'HOST EXCEPTION', 'UNTRANSLATED INSTRUCTION',
-                        'nvn: stopping:', 'nvn_vk: stopping:', 'FATAL:', 'fatal:'
-                    )
-                    pos = max((run_text.rfind(m) for m in markers), default=-1)
+                    # A guest trap raises the private Windows exception 0xe0000001,
+                    # so HOST EXCEPTION appears a few lines after the useful GUEST TRAP
+                    # reason. Prefer that reason instead of choosing the latest marker.
+                    preferred = ('GUEST TRAP:', 'UNTRANSLATED INSTRUCTION',
+                                 'nvn: stopping:', 'nvn_vk: stopping:', 'FATAL:', 'fatal:')
+                    pos = -1
+                    for marker in preferred:
+                        q = run_text.rfind(marker)
+                        if q > pos:
+                            pos = q
                     if pos < 0:
-                        pos = max(0, len(run_text) - 12000)
+                        q = run_text.rfind('HOST EXCEPTION')
+                        pos = max(0, q - 1200) if q >= 0 else max(0, len(run_text) - 12000)
                     excerpt = run_text[pos:]
                     if len(excerpt) > 12000:
                         excerpt = excerpt[:12000] + '\n... [fatal excerpt truncated] ...\n'
