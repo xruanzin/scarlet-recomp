@@ -58,11 +58,9 @@ static uint64_t align_up_u64(uint64_t v, uint64_t a) {
  * frames, 4 flag bytes, splitter count, splitter-send count, reserved, revision.
  *
  * The arithmetic below follows the public Horizon audren sizing model used by
- * Switch implementations. Our bootstrap renderer is silent and does not
- * consume this transfer memory, so keep a 16 MiB compatibility floor as a
- * guard against revision-specific additions in Scarlet's SDK. The previous
- * hard-coded 8 MiB value was proven too small: the guest wrote exactly at
- * work_buffer + 0x800000 during OpenAudioRenderer. */
+ * Switch implementations. The value returned to the guest must remain the
+ * parameter-derived size: Nintendo's SDK allocates exactly that much (rounded
+ * to pages) and then partitions it in InitializeAudioRendererConfig. */
 static uint64_t scarlet_audren_work_buffer_size(const uint32_t *p, size_t bytes) {
     /* The game's SDK allocates this buffer from its own heap immediately after
      * querying audren:u. Returning an arbitrary multi-megabyte compatibility
@@ -593,7 +591,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             static const uint64_t lang_codes[] = {
                 0x000000000000616aULL, /* ja */
                 0x00000053552d6e65ULL, /* en-US */
-                0x000000000072662ULL,  /* fr */
+                0x0000000000007266ULL, /* fr */
                 0x00000000006564ULL,   /* de */
                 0x00000000007469ULL,   /* it */
                 0x00000000007365ULL,   /* es */
@@ -860,8 +858,14 @@ static int ipc_svc(Ctx *c, uint32_t n) {
         return 1;
     }
     case 0x16:
-        /* Only claim handles owned here; future kernel object classes dispatch elsewhere. */
-        if (!get_session((uint32_t)x[0])) return 0;
+        /* Thread/transfer/shared-memory handlers run before IPC. Anything left
+         * here is either one of our IPC sessions or an invalid/closed handle.
+         * Horizon returns InvalidHandle for the latter; it does not trap. This
+         * matters for SDK proxy destructors after a failed sm:GetService. */
+        if (!get_session((uint32_t)x[0])) {
+            x[0] = R_INVALID_HANDLE;
+            return 1;
+        }
         x[0] = close_session((uint32_t)x[0]); return 1;
     case 0x1f: {
         const char *name = (const char *)(uintptr_t)x[1];
