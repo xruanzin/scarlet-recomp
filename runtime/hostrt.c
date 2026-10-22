@@ -902,6 +902,13 @@ void scarlet_heap_note_committed(uint64_t end) {
         if ((uint64_t)InterlockedCompareExchange64(p, (LONG64)want, (LONG64)old) == old) break;
     }
 }
+int scarlet_heap_range_valid(uint64_t addr, uint64_t size) {
+    if (!size || addr < SCARLET_HEAP_BASE || addr + size < addr) return 0;
+    uint64_t used = (uint64_t)InterlockedCompareExchange64(
+        (volatile LONG64 *)&g_scarlet_heap_size, 0, 0);
+    return addr - SCARLET_HEAP_BASE <= used &&
+           size <= used - (addr - SCARLET_HEAP_BASE);
+}
 static uint64_t g_scarlet_user_exception_ctx;
 static uint64_t g_scarlet_rng = 0x9e3779b97f4a7c15ULL;
 /* Horizon metadata for the process main thread (main.npdm: priority 44,
