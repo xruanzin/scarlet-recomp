@@ -76,7 +76,16 @@ int scarlet_thread_svc(Ctx *c, uint32_t n) {
     int handled = 1;
     if (n == 8) {
         int priority = (int32_t)x[4], core = (int32_t)x[5];
+        trace_printf("Scarlet CreateThread request entry=%llx arg=%llx stack=%llx priority=%d core=%d caller=%llx lr=%llx\n",
+                     (unsigned long long)x[1], (unsigned long long)x[2],
+                     (unsigned long long)x[3], priority, core,
+                     (unsigned long long)c->fn, (unsigned long long)c->x[30]);
         if (priority < 0 || priority > 63 || core < -2 || core > 3 || core == -1 || (x[3] & 15) || !x[1] || !x[3]) {
+            trace_printf("Scarlet CreateThread rejected: priority=%d core=%d stack_align=%llx entry=%llx stack=%llx\n",
+                         priority, core, (unsigned long long)(x[3] & 15),
+                         (unsigned long long)x[1], (unsigned long long)x[3]);
+            printf("Scarlet CreateThread rejected: entry=%llx stack=%llx priority=%d core=%d\n",
+                   (unsigned long long)x[1], (unsigned long long)x[3], priority, core);
             x[0] = 0xf001; x[1] = 0;
         } else {
             unsigned slot = 0;
