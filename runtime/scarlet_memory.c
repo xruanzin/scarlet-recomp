@@ -9,6 +9,7 @@
 #define STACK_SIZE 0x40000000ULL
 static SRWLOCK map_lock = SRWLOCK_INIT;
 static void *stack_reservation;
+static int stack_full_reservation;
 static uint64_t bootstrap_stack_base, bootstrap_stack_size;
 
 /* HIPC descriptors carry only 39 address bits. ASLR can place VirtualAlloc(NULL)
@@ -33,13 +34,36 @@ void *scarlet_bootstrap_stack_reserve(size_t size) {
     if (!size || size > STACK_SIZE || (size & 0xfff)) return NULL;
     size = (size + 0xffff) & ~(size_t)0xffff;
     AcquireSRWLockExclusive(&map_lock);
-    if (!stack_reservation)
-        stack_reservation = VirtualAlloc((void *)(uintptr_t)STACK_BASE, STACK_SIZE, MEM_RESERVE, PAGE_NOACCESS);
+
     void *p = NULL;
-    if (stack_reservation && !bootstrap_stack_size) {
+    if (!bootstrap_stack_size) {
         bootstrap_stack_size = size;
         bootstrap_stack_base = STACK_BASE + STACK_SIZE - size;
-        p = (void *)(uintptr_t)bootstrap_stack_base;
+
+        /* Prefer one reservation for the complete Horizon stack-alias region.
+         * On Windows this can fail nondeterministically when ASLR places an
+         * unrelated mapping anywhere inside the 1 GiB span, even though the
+         * actual 1 MiB process stack at the top is free. In that case reserve
+         * only the bootstrap stack window; MapMemory below reserves its own
+         * sparse destination ranges on demand. */
+        if (!stack_reservation) {
+            stack_reservation = VirtualAlloc((void *)(uintptr_t)STACK_BASE,
+                                             STACK_SIZE, MEM_RESERVE, PAGE_NOACCESS);
+            if (stack_reservation) stack_full_reservation = 1;
+        }
+        if (stack_full_reservation) {
+            p = (void *)(uintptr_t)bootstrap_stack_base;
+        } else {
+            p = VirtualAlloc((void *)(uintptr_t)bootstrap_stack_base, (SIZE_T)size,
+                             MEM_RESERVE, PAGE_NOACCESS);
+            if (p != (void *)(uintptr_t)bootstrap_stack_base) {
+                if (p) VirtualFree(p, 0, MEM_RELEASE);
+                p = NULL;
+                bootstrap_stack_base = bootstrap_stack_size = 0;
+            } else {
+                stack_reservation = p;
+            }
+        }
     }
     ReleaseSRWLockExclusive(&map_lock);
     return p;
@@ -277,12 +301,25 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
     if (!VirtualQuery((void *)(uintptr_t)src, &info, sizeof info) || info.State != MEM_COMMIT ||
         !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (info.Protect & PAGE_GUARD) ||
         src + size > (uint64_t)(uintptr_t)info.BaseAddress + info.RegionSize) return 0xdc01;
-    if (!stack_reservation) {
-        stack_reservation = VirtualAlloc((void *)(uintptr_t)STACK_BASE, STACK_SIZE, MEM_RESERVE, PAGE_NOACCESS);
-        if (!stack_reservation) return 0xd001;
+    void *mapped = NULL;
+    if (stack_full_reservation) {
+        mapped = VirtualAlloc((void *)(uintptr_t)dst, (SIZE_T)size, MEM_COMMIT, PAGE_READWRITE);
+    } else {
+        MEMORY_BASIC_INFORMATION dmi = {0};
+        if (!VirtualQuery((void *)(uintptr_t)dst, &dmi, sizeof dmi)) return 0xd001;
+        uint64_t dend = (uint64_t)(uintptr_t)dmi.BaseAddress + dmi.RegionSize;
+        if (dst + size > dend) return 0xd001;
+        if (dmi.State == MEM_RESERVE) {
+            mapped = VirtualAlloc((void *)(uintptr_t)dst, (SIZE_T)size, MEM_COMMIT, PAGE_READWRITE);
+        } else if (dmi.State == MEM_FREE) {
+            mapped = VirtualAlloc((void *)(uintptr_t)dst, (SIZE_T)size,
+                                  MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        }
     }
-    void *mapped = VirtualAlloc((void *)(uintptr_t)dst, (SIZE_T)size, MEM_COMMIT, PAGE_READWRITE);
-    if (!mapped) return 0xd001;
+    if (mapped != (void *)(uintptr_t)dst) {
+        if (mapped) VirtualFree(mapped, 0, MEM_RELEASE);
+        return 0xd001;
+    }
     memcpy(mapped, (void *)(uintptr_t)src, (size_t)size);
     DWORD old;
     if (!VirtualProtect((void *)(uintptr_t)src, (SIZE_T)size, PAGE_NOACCESS, &old)) {
