@@ -282,8 +282,13 @@ def lift_function(env, entry):
         out.append('  if (rp) switch (rp) {')
         out.extend('  case 0x%xULL: goto L_%x;' % (lp, lp) for lp in pads)
         out.append('  default: guest_trap("resume at an address that is not a landing pad of this function", rp); }')
+    trace_pc_raw = os.environ.get('RECOMP_TRACE_PC_FUNCTION', '')
+    trace_pc_entry = int(trace_pc_raw, 0) if trace_pc_raw else 0
     for pc, stmt in lines:
-        out.append('L_%x: %s' % (pc, stmt))
+        if entry == trace_pc_entry:
+            out.append('L_%x: c->fn = 0x%xULL; %s' % (pc, pc, stmt))
+        else:
+            out.append('L_%x: %s' % (pc, stmt))
     falls = end < BASE + TEXT_SIZE and not lines[-1][1].startswith(TAILS)
     out.append('  f_%x(c); return;' % end if falls else '  return;')
     if fn.has_br:
