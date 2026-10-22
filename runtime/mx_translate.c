@@ -305,6 +305,36 @@ static const char *tex_offset(Mx *e, unsigned t, const char *reg, int bits) {   
     if (t <= 3) return S(e, "ivec2(bitfieldExtract(int(%s), 0, %d), bitfieldExtract(int(%s), %d, %d))", reg, bits, reg, step, bits);
     return S(e, "ivec3(bitfieldExtract(int(%s), 0, %d), bitfieldExtract(int(%s), %d, %d), bitfieldExtract(int(%s), %d, %d))", reg, bits, reg, step, bits, reg, 2 * step, bits);
 }
+/* GLSL requires the Offset operands of textureOffset/texelFetchOffset/textureGatherOffset
+ * to be compile-time constants. Maxwell allows the packed offset to come from a register.
+ * For integer fetches, folding the offset into the coordinates is exact. For normalized
+ * samples/gathers we express the same displacement in level-0 texels; this compatibility
+ * path keeps Scarlet shaders executable instead of rejecting the complete stage. */
+static const char *tex_fetch_coords_offset(Mx *e, unsigned t, const char *coords, const char *off) {
+    switch (t) {
+    case 0: return S(e, "(%s + %s)", coords, off);
+    case 1: return S(e, "ivec2((%s).x + %s, (%s).y)", coords, off, coords);
+    case 2: return S(e, "(%s + %s)", coords, off);
+    case 3: return S(e, "ivec3((%s).xy + %s, (%s).z)", coords, off, coords);
+    case 4: return S(e, "(%s + %s)", coords, off);
+    default: fail(e, "texture offset", "dynamic fetch offset on texture type %u", t); return coords;
+    }
+}
+static const char *tex_sample_coords_offset(Mx *e, unsigned t, const char *smp, const char *coords, const char *off) {
+    switch (t) {
+    case 0:
+        return S(e, "(%s + float(%s) / float(max(textureSize(%s, 0), 1)))", coords, off, smp);
+    case 1:
+        return S(e, "vec2((%s).x + float(%s) / float(max(textureSize(%s, 0).x, 1)), (%s).y)", coords, off, smp, coords);
+    case 2:
+        return S(e, "(%s + vec2(%s) / vec2(max(textureSize(%s, 0), ivec2(1))))", coords, off, smp);
+    case 3:
+        return S(e, "vec3((%s).xy + vec2(%s) / vec2(max(textureSize(%s, 0).xy, ivec2(1))), (%s).z)", coords, off, smp, coords);
+    case 4:
+        return S(e, "(%s + vec3(%s) / vec3(max(textureSize(%s, 0), ivec3(1))))", coords, off, smp);
+    default: fail(e, "texture offset", "dynamic sample offset on texture type %u", t); return coords;
+    }
+}
 /* stores the components selected by mask into consecutive registers from rd */
 static void tex_store_mask(Mx *e, unsigned mask, unsigned rd, int is_int) {
     unsigned r = rd;
@@ -347,16 +377,17 @@ static void op_tex(Mx *e, uint64_t i) {
     int explicit_lod = blod == 1 || blod == 3 || blod == 7, bias = blod == 2 || blod == 6, is_int = tex_is_int(e, unit, dc);
     if (e->in->stage != MX_FRAGMENT && !explicit_lod) { explicit_lod = 1; bias = 0; lod = NULL; }
     const char *lodv = blod == 1 || !lod ? "0.0" : lod, *smp = SMP(e, unit, k_tex_base[t], dc), *call;
+    if (off) { coords = tex_sample_coords_offset(e, t, smp, coords, off); off = NULL; }
     if (dc) {
         const char *p = shadow_coords(e, t, coords, dim, dref);
-        if (t == 7 && (explicit_lod || off || bias)) { fail(e, "TEX", "shadow cube array with lod/offset/bias"); return; }
+        if (t == 7 && (explicit_lod || bias)) { fail(e, "TEX", "shadow cube array with lod/bias"); return; }
         if (t == 7) call = S(e, "texture(%s, %s, %s)", smp, p, dref);
-        else if (explicit_lod) call = off ? S(e, "textureLodOffset(%s, %s, %s, %s)", smp, p, lodv, off) : S(e, "textureLod(%s, %s, %s)", smp, p, lodv);
-        else call = off ? S(e, "textureOffset(%s, %s, %s%s%s)", smp, p, off, bias ? ", " : "", bias ? lod : "") : S(e, "texture(%s, %s%s%s)", smp, p, bias ? ", " : "", bias ? lod : "");
+        else if (explicit_lod) call = S(e, "textureLod(%s, %s, %s)", smp, p, lodv);
+        else call = S(e, "texture(%s, %s%s%s)", smp, p, bias ? ", " : "", bias ? lod : "");
         emit(e, "float sv = %s; vec4 tv = vec4(sv, sv, sv, 1.0);", call);
     } else {
-        if (explicit_lod) call = off ? S(e, "textureLodOffset(%s, %s, %s, %s)", smp, coords, lodv, off) : S(e, "textureLod(%s, %s, %s)", smp, coords, lodv);
-        else call = off ? S(e, "textureOffset(%s, %s, %s%s%s)", smp, coords, off, bias ? ", " : "", bias ? lod : "") : S(e, "texture(%s, %s%s%s)", smp, coords, bias ? ", " : "", bias ? lod : "");
+        if (explicit_lod) call = S(e, "textureLod(%s, %s, %s)", smp, coords, lodv);
+        else call = S(e, "texture(%s, %s%s%s)", smp, coords, bias ? ", " : "", bias ? lod : "");
         emit(e, "%s%s;", tv_decl(is_int, e->in->sint_tex >> unit & 1), call);
     }
     tex_store_mask(e, mask, MXB(i, 0, 8), is_int);
@@ -432,8 +463,9 @@ static void op_tld(Mx *e, uint64_t i) {
     int is_int = tex_is_int(e, unit, 0);
     const char *smp = SMP(e, unit, base, 0), *call;
     if (t == 2 && !ms) coords = tf_scaled(e, unit, smp, coords, &off);
+    if (off) { coords = tex_fetch_coords_offset(e, t, coords, off); off = NULL; }
     if (ms) call = S(e, "texelFetch(%s, %s, %s)", smp, coords, smpl);
-    else call = off ? S(e, "texelFetchOffset(%s, %s, %s, %s)", smp, coords, lod, off) : S(e, "texelFetch(%s, %s, %s)", smp, coords, lod);
+    else call = S(e, "texelFetch(%s, %s, %s)", smp, coords, lod);
     emit(e, "%s%s;", tv_decl(is_int, e->in->sint_tex >> unit & 1), call);
     tex_store_mask(e, mask, MXB(i, 0, 8), is_int);
     if (MXB(i, 51, 3) != 7) emit(e, " %s = true;", PD(e, MXB(i, 51, 3)));
@@ -456,7 +488,7 @@ static void op_tlds(Mx *e, uint64_t i) {
         call = S(e, "texelFetch(%s, ivec2(%s, %s), 0)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, b)); break;
     case 4: off = tex_offset(e, 2, X(e, b), 4);
         if (TLDS_RS) { const char *sm = SMP(e, unit, "2D", 0); call = S(e, "texelFetch(%s, %s, 0)", sm, tf_scaled(e, unit, sm, S(e, "ivec2(%s, %s)", IR(e, a), IR(e, a + 1)), &off)); break; }
-        call = S(e, "texelFetchOffset(%s, ivec2(%s, %s), 0, %s)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, a + 1), off); break;
+        call = S(e, "texelFetch(%s, ivec2(%s, %s) + %s, 0)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, a + 1), off); break;
     case 5: if (TLDS_RS) { const char *sm = SMP(e, unit, "2D", 0); call = S(e, "texelFetch(%s, %s, %s)", sm, tf_scaled(e, unit, sm, S(e, "ivec2(%s, %s)", IR(e, a), IR(e, a + 1)), NULL), IR(e, b)); break; }
         call = S(e, "texelFetch(%s, ivec2(%s, %s), %s)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, a + 1), IR(e, b)); break;
     case 6: call = S(e, "texelFetch(%s, ivec2(%s, %s), %s)", SMP(e, unit, "2DMS", 0), IR(e, a), IR(e, a + 1), IR(e, b)); break;
@@ -464,7 +496,7 @@ static void op_tlds(Mx *e, uint64_t i) {
     case 8: call = S(e, "texelFetch(%s, ivec3(%s, %s, int(%s & 0xffffu)), 0)", SMP(e, unit, "2DArray", 0), IR(e, b), IR(e, b + 1), X(e, a)); break;
     case 12: off = tex_offset(e, 2, X(e, b + 1), 4);
         if (TLDS_RS) { const char *sm = SMP(e, unit, "2D", 0); call = S(e, "texelFetch(%s, %s, %s)", sm, tf_scaled(e, unit, sm, S(e, "ivec2(%s, %s)", IR(e, a), IR(e, a + 1)), &off), IR(e, b)); break; }
-        call = S(e, "texelFetchOffset(%s, ivec2(%s, %s), %s, %s)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, a + 1), IR(e, b), off); break;
+        call = S(e, "texelFetch(%s, ivec2(%s, %s) + %s, %s)", SMP(e, unit, "2D", 0), IR(e, a), IR(e, a + 1), off, IR(e, b)); break;
     default: fail(e, "TLDS", "TLDS encoding %u", enc); return;
     }
     emit(e, "%s%s;", tv_decl(is_int, e->in->sint_tex >> unit & 1), call);
@@ -490,15 +522,17 @@ static void op_tld4(Mx *e, uint64_t i) {
         emit(e, " ivec4 o2 = ivec4(bitfieldExtract(int(%s), 0, 6), bitfieldExtract(int(%s), 8, 6), bitfieldExtract(int(%s), 16, 6), bitfieldExtract(int(%s), 24, 6));", p2, p2, p2, p2);
         emit(e, " %s tv;", dc ? "vec4" : is_int ? ((e->in->sint_tex >> unit & 1) ? "ivec4" : "uvec4") : "vec4");
         for (int k = 0; k < 4; k++) {
-            if (dc) emit(e, " tv[%d] = textureGatherOffset(%s, %s, %s, %s).w;", k, smp, coords, dref, o[k]);
-            else emit(e, " tv[%d] = textureGatherOffset(%s, %s, %s, %u).w;", k, smp, coords, o[k], comp);
+            const char *co = tex_sample_coords_offset(e, t, smp, coords, o[k]);
+            if (dc) emit(e, " tv[%d] = textureGather(%s, %s, %s).w;", k, smp, co, dref);
+            else emit(e, " tv[%d] = textureGather(%s, %s, %u).w;", k, smp, co, comp);
         }
         tex_store_mask(e, mask, MXB(i, 0, 8), is_int);
         if (MXB(i, 51, 3) != 7) emit(e, " %s = true;", PD(e, MXB(i, 51, 3)));
         return;
     }
-    if (dc) call = off ? S(e, "textureGatherOffset(%s, %s, %s, %s)", smp, coords, dref, off) : S(e, "textureGather(%s, %s, %s)", smp, coords, dref);
-    else call = off ? S(e, "textureGatherOffset(%s, %s, %s, %u)", smp, coords, off, comp) : S(e, "textureGather(%s, %s, %u)", smp, coords, comp);
+    if (off) { coords = tex_sample_coords_offset(e, t, smp, coords, off); off = NULL; }
+    if (dc) call = S(e, "textureGather(%s, %s, %s)", smp, coords, dref);
+    else call = S(e, "textureGather(%s, %s, %u)", smp, coords, comp);
     emit(e, "%s%s;", dc ? "vec4 tv = " : tv_decl(is_int, e->in->sint_tex >> unit & 1), call);
     tex_store_mask(e, mask, MXB(i, 0, 8), is_int);
     if (MXB(i, 51, 3) != 7) emit(e, " %s = true;", PD(e, MXB(i, 51, 3)));
@@ -512,7 +546,8 @@ static void op_tld4s(Mx *e, uint64_t i) {
     const char *smp = SMP(e, unit, "2D", dc), *call;
     if (aoffi) {
         const char *off = tex_offset(e, 2, X(e, b), 6), *co = S(e, "vec2(%s, %s)", FR(e, a), FR(e, a + 1));
-        call = dc ? S(e, "textureGatherOffset(%s, %s, %s, %s)", smp, co, FR(e, b + 1), off) : S(e, "textureGatherOffset(%s, %s, %s, %u)", smp, co, off, comp);
+        co = tex_sample_coords_offset(e, 2, smp, co, off);
+        call = dc ? S(e, "textureGather(%s, %s, %s)", smp, co, FR(e, b + 1)) : S(e, "textureGather(%s, %s, %u)", smp, co, comp);
     } else if (dc) call = S(e, "textureGather(%s, vec2(%s, %s), %s)", smp, FR(e, a), FR(e, a + 1), FR(e, b));
     else call = S(e, "textureGather(%s, vec2(%s, %s), %u)", smp, FR(e, a), FR(e, b), comp);
     emit(e, "%s%s;", dc ? "vec4 tv = " : tv_decl(is_int, e->in->sint_tex >> unit & 1), call);
@@ -565,8 +600,9 @@ static void op_txd(Mx *e, uint64_t i) {
     }
     int is_int = tex_is_int(e, unit, 0);
     const char *smp = SMP(e, unit, k_tex_base[t], 0);
+    if (off) coords = tex_sample_coords_offset(e, t, smp, coords, off);
     emit(e, "%s%s;", tv_decl(is_int, e->in->sint_tex >> unit & 1),
-         off ? S(e, "textureGradOffset(%s, %s, %s, %s, %s)", smp, coords, dx, dy, off) : S(e, "textureGrad(%s, %s, %s, %s)", smp, coords, dx, dy));
+         S(e, "textureGrad(%s, %s, %s, %s)", smp, coords, dx, dy));
     tex_store_mask(e, mask, MXB(i, 0, 8), is_int);
     if (MXB(i, 51, 3) != 7) emit(e, " %s = true;", PD(e, MXB(i, 51, 3)));
 }
