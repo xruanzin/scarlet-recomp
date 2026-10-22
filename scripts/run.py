@@ -21,6 +21,7 @@ Options go to the game as environment variables (listed in BUILDING.md); --env N
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,8 @@ def main():
     ap.add_argument('--seed', help='SSBU_FIXED_SEED value (deterministic random numbers)')
     ap.add_argument('--log', help='write the game output to this file instead of the console')
     ap.add_argument('--env', action='append', default=[], help='NAME=VALUE, may be repeated')
+    ap.add_argument('--no-auto-late', action='store_true',
+                    help='Scarlet --play: do not rebuild/restart automatically after a newly discovered indirect target')
     ap.add_argument('--mac', action='store_true', help='the native macOS build (default build folder build-macos, exe ssbu_native, '
                                                       'saves in ~/Library/Application Support/ssbu-recomp/userdata unless --userdata)')
     a = ap.parse_args()
@@ -208,11 +211,106 @@ def main():
     os.makedirs(a.userdata, exist_ok=True)
     os.makedirs(os.path.join(a.build, 'cache'), exist_ok=True)      # the runtime creates ..\cache\vk below it but not the folder itself (found 2026-10-13: with SSBU_VK_PREP=0 on a clean build nothing was saved)
     cmd = [exe, os.path.join(a.build, 'binaries', state.get('game_version', '13.0.4'), 'main.elf'), str(a.seconds)]
-    t0 = time.time()
-    out = open(a.log, 'wb') if a.log else None
-    p = subprocess.run(cmd, cwd=work, env=env, stdout=out, stderr=subprocess.STDOUT if out else None)
-    print('game exited with code %d after %.0f s' % (p.returncode, time.time() - t0))
-    return p.returncode
+
+    # Scarlet's static recompile learns rare indirect-call entry points from real boot.
+    # setup.py already knows how to relift only the affected module while preserving all
+    # unchanged objects. Make --play close that loop automatically: after a trap records
+    # a new target, rebuild from compile and immediately try the boot again.
+    auto_late = bool(is_scarlet and a.play and a.exe == main_exe and
+                     not (a.linux or a.mac) and not a.no_auto_late)
+    late_path = os.path.join(a.build, 'scarlet_late_targets.txt')
+    late_re = re.compile(r'Scarlet late indirect target recorded:\s+(main|sdk|subsdk0)\s+(0x[0-9a-fA-F]+)')
+    max_auto_late = 24
+    auto_count = 0
+    total_t0 = time.time()
+
+    def known_late_targets():
+        vals = set()
+        try:
+            with open(late_path, encoding='utf-8', errors='replace') as lf:
+                for line in lf:
+                    p = line.split()
+                    if len(p) == 2 and p[0] in scarlet_profile.STATIC_MODULES:
+                        try:
+                            vals.add((p[0], int(p[1], 0)))
+                        except ValueError:
+                            pass
+        except OSError:
+            pass
+        return vals
+
+    while True:
+        before = known_late_targets()
+        log_start = 0
+        if a.log:
+            try:
+                log_start = os.path.getsize(a.log)
+            except OSError:
+                pass
+        mode = 'ab' if auto_count else 'wb'
+        out = open(a.log, mode) if a.log else None
+        if out and auto_count:
+            out.write(('\n\n===== Scarlet automatic late-target restart %d =====\n' % auto_count).encode('utf-8'))
+            out.flush()
+        t0 = time.time()
+        try:
+            p = subprocess.run(cmd, cwd=work, env=env, stdout=out, stderr=subprocess.STDOUT if out else None)
+        finally:
+            if out:
+                out.close()
+        print('game exited with code %d after %.0f s' % (p.returncode, time.time() - t0))
+
+        if not auto_late:
+            return p.returncode
+
+        # The runtime normally writes build/scarlet_late_targets.txt itself. Also
+        # recover the marker from this run's log so a crash during target recording
+        # cannot force another manual round trip.
+        found = set()
+        if a.log:
+            try:
+                with open(a.log, 'rb') as lf:
+                    lf.seek(log_start)
+                    tail = lf.read().decode('utf-8', 'replace')
+                for module, addr in late_re.findall(tail):
+                    found.add((module, int(addr, 0)))
+            except OSError:
+                pass
+        after = known_late_targets()
+        new_targets = (after | found) - before
+        if not new_targets:
+            return p.returncode
+        if auto_count >= max_auto_late:
+            print('Scarlet auto-relift stopped after %d restarts; latest new target(s): %s' %
+                  (max_auto_late, ', '.join('%s %#x' % x for x in sorted(new_targets))))
+            return p.returncode
+
+        # Ensure every marker is persisted in the same file setup.py consumes.
+        if found - after:
+            os.makedirs(a.build, exist_ok=True)
+            with open(late_path, 'a', encoding='utf-8', newline='\n') as lf:
+                for module, addr in sorted(found - after):
+                    lf.write('%s %#x\n' % (module, addr))
+
+        print('Scarlet discovered %s; rebuilding only the affected lifted module and restarting...' %
+              ', '.join('%s %#x' % x for x in sorted(new_targets)))
+        exefs = state.get('dump', {}).get('exefs', '')
+        romfs_state = state.get('dump', {}).get('romfs', '')
+        try:
+            dump_root = os.path.commonpath([os.path.abspath(exefs), os.path.abspath(romfs_state)])
+        except (ValueError, TypeError):
+            dump_root = os.path.dirname(romfs_state or exefs)
+        if os.path.basename(dump_root).lower() in ('exefs', 'romfs'):
+            dump_root = os.path.dirname(dump_root)
+        build_cmd = [sys.executable, os.path.join(REPO, 'scripts', 'setup.py'),
+                     '--dump', dump_root, '--from', 'compile', '--build', a.build]
+        br = subprocess.run(build_cmd, cwd=REPO)
+        if br.returncode:
+            print('Scarlet automatic incremental rebuild failed with code %d.' % br.returncode)
+            return br.returncode
+        auto_count += 1
+        print('Scarlet incremental rebuild complete; automatic boot retry %d/%d.' %
+              (auto_count, max_auto_late))
 
 
 if __name__ == '__main__':
