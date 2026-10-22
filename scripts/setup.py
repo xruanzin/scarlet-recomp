@@ -1256,6 +1256,22 @@ def step_nro(cx):
     os.makedirs(d, exist_ok=True)
     say('  Scarlet bootstrap: 0 ahead-of-time NRO module libraries')
 
+def glslang_needs_build(work, root):
+    """Keep the loaded shader DLL when its inputs are unchanged."""
+    dll = os.path.join(work, 'ssbu_glslang.dll')
+    if not os.path.isfile(dll):
+        return True
+    output_time = os.stat(dll).st_mtime_ns
+    inputs = [os.path.join(work, n) for n in ('build_glslang.bat', 'vk_glslang_shim.c')]
+    for folder in ('include', 'lib'):
+        directory = os.path.join(root, folder)
+        if not os.path.isdir(directory):
+            return True
+        for parent, _, names in os.walk(directory):
+            inputs.extend(os.path.join(parent, n) for n in names)
+    return any(not os.path.isfile(p) or os.stat(p).st_mtime_ns > output_time for p in inputs)
+
+
 def step_link(cx):
     if cx.linux:
         return link_linux(cx)
@@ -1285,7 +1301,10 @@ def step_link(cx):
         copy_ffmpeg(cx)
         copy_logo(cx)
         return
-    cx.run('link', [os.environ.get('COMSPEC', 'cmd.exe'), '/c', os.path.join(cx.work, 'build_glslang.bat')], env=cx.env())
+    if glslang_needs_build(cx.work, cx.tools['glslang']):
+        cx.run('link', [os.environ.get('COMSPEC', 'cmd.exe'), '/c', os.path.join(cx.work, 'build_glslang.bat')], env=cx.env())
+    else:
+        say('  ssbu_glslang.dll: inputs unchanged, keeping existing DLL')
     cx.run('link', [sys.executable, 'build.py', 'link'], env=cx.env(**{k: v for k, v in build_env(cx).items() if k != 'RECOMP_NRO_SUFFIX'}, RECOMP_EXE=EXE))
     exe = os.path.join(cx.work, EXE)
     for f in (EXE, 'SDL3.dll', 'ssbu_glslang.dll', game_lib(cx)):
