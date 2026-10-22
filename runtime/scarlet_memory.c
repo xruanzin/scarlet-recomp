@@ -85,6 +85,62 @@ typedef struct {
 static SharedMem shmem[SHMEM_LIMIT];
 static SRWLOCK shmem_lock = SRWLOCK_INIT;
 
+/* Horizon transfer-memory objects. Unlike SharedMemory, the backing pages are
+ * owned by the guest process itself; the kernel object only lends that range to
+ * another service/process. Scarlet creates one 8 MiB Perm_None object for
+ * audren:u during boot. Keep the source address and expose optional alias
+ * mapping for SVC 0x51/0x52 so later services can use the same object model. */
+#define TMEM_BASE 0x40000u
+#define TMEM_LIMIT 64
+typedef struct {
+    uint64_t src, size, mapped_addr;
+    uint32_t owner_perm, mapped_perm;
+} TransferMem;
+static TransferMem tmem[TMEM_LIMIT];
+static SRWLOCK tmem_lock = SRWLOCK_INIT;
+static void shared_vm_unmap(uint64_t addr, uint64_t size);
+static int shared_vm_map(uint64_t addr, uint64_t size);
+
+static TransferMem *transfer_lookup(uint32_t h) {
+    if (h < TMEM_BASE || h >= TMEM_BASE + TMEM_LIMIT) return NULL;
+    TransferMem *m = &tmem[h - TMEM_BASE];
+    return m->size ? m : NULL;
+}
+static uint32_t transfer_create(uint64_t src, uint64_t size, uint32_t perm, uint32_t *out_h) {
+    if (!out_h || !src || (src & 0xfff) || !size || (size & 0xfff) || src + size < src)
+        return 0xcc01;
+    if (perm != 0 && perm != 1 && perm != 3) return 0xd801;
+    /* The range must already be committed guest memory. Check every Windows
+     * virtual region it crosses; an aligned allocator can span more than one. */
+    uint64_t p = src, end = src + size;
+    while (p < end) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
+            (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            return 0xdc01;
+        uint64_t next = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= p) return 0xdc01;
+        p = next < end ? next : end;
+    }
+    unsigned slot = 0;
+    while (slot < TMEM_LIMIT && tmem[slot].size) ++slot;
+    if (slot == TMEM_LIMIT) return 0xd201;
+    tmem[slot] = (TransferMem){src, size, 0, perm, 0};
+    *out_h = TMEM_BASE + slot;
+    return 0;
+}
+static int transfer_close(uint32_t h) {
+    TransferMem *m = transfer_lookup(h);
+    if (!m) return 0;
+    if (m->mapped_addr) {
+        if (m->mapped_perm & 2)
+            memcpy((void *)(uintptr_t)m->src, (void *)(uintptr_t)m->mapped_addr, (size_t)m->size);
+        shared_vm_unmap(m->mapped_addr, m->size);
+    }
+    memset(m, 0, sizeof *m);
+    return 1;
+}
+
 /* VirtualAlloc reservations require 64KiB alignment, while Horizon accepts
  * any 4KiB-aligned shared-memory address. Several guest objects may occupy
  * different pages of one Windows reservation. Track page ownership so closing
@@ -242,6 +298,51 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
 }
 
 int scarlet_memory_svc(Ctx *c, uint32_t n) {
+    if (n == 0x15) { /* CreateTransferMemory(_, source, size, permission) -> result, handle */
+        uint64_t src = c->x[1], size = c->x[2];
+        uint32_t perm = (uint32_t)c->x[3], h = 0;
+        AcquireSRWLockExclusive(&tmem_lock);
+        uint32_t r = transfer_create(src, size, perm, &h);
+        ReleaseSRWLockExclusive(&tmem_lock);
+        c->x[0] = r; c->x[1] = r ? 0 : h;
+        trace_printf("Scarlet CreateTransferMemory src=%llx size=%llx perm=%u -> %x result=%x\n",
+                     (unsigned long long)src, (unsigned long long)size, perm, h, r);
+        return 1;
+    }
+    if (n == 0x51 || n == 0x52) { /* Map/UnmapTransferMemory(handle, addr, size[, perm]) */
+        uint32_t h = (uint32_t)c->x[0];
+        uint64_t addr = c->x[1], size = c->x[2];
+        uint32_t perm = (uint32_t)c->x[3], r = 0;
+        AcquireSRWLockExclusive(&tmem_lock);
+        TransferMem *m = transfer_lookup(h);
+        if (!m || !addr || (addr & 0xfff) || !size || (size & 0xfff) || size != (m ? m->size : 0)) {
+            r = 0xe401;
+        } else if (n == 0x51) {
+            if (perm != 0 && perm != 1 && perm != 3) r = 0xd801;
+            else if (m->mapped_addr && m->mapped_addr != addr) r = 0xdc01;
+            else if (!m->mapped_addr) {
+                if (!shared_vm_map(addr, size)) r = 0xd001;
+                else {
+                    memcpy((void *)(uintptr_t)addr, (void *)(uintptr_t)m->src, (size_t)size);
+                    m->mapped_addr = addr; m->mapped_perm = perm;
+                }
+            }
+        } else {
+            if (m->mapped_addr != addr) r = 0xdc01;
+            else {
+                if (m->mapped_perm & 2)
+                    memcpy((void *)(uintptr_t)m->src, (void *)(uintptr_t)addr, (size_t)size);
+                shared_vm_unmap(addr, size);
+                m->mapped_addr = 0; m->mapped_perm = 0;
+            }
+        }
+        ReleaseSRWLockExclusive(&tmem_lock);
+        c->x[0] = r;
+        trace_printf("Scarlet %sTransferMemory h=%x addr=%llx size=%llx perm=%u -> %x\n",
+                     n == 0x51 ? "Map" : "Unmap", h, (unsigned long long)addr,
+                     (unsigned long long)size, perm, r);
+        return 1;
+    }
     if (n == 0x13 || n == 0x14) { /* Map/UnmapSharedMemory */
         AcquireSRWLockExclusive(&shmem_lock);
         uint32_t h = (uint32_t)c->x[0];
@@ -255,8 +356,12 @@ int scarlet_memory_svc(Ctx *c, uint32_t n) {
     }
     if (n == 0x16) {
         uint32_t h = (uint32_t)c->x[0];
+        AcquireSRWLockExclusive(&tmem_lock);
+        int handled = transfer_close(h);
+        ReleaseSRWLockExclusive(&tmem_lock);
+        if (handled) { c->x[0] = 0; return 1; }
         AcquireSRWLockExclusive(&shmem_lock);
-        int handled = shared_close(h);
+        handled = shared_close(h);
         ReleaseSRWLockExclusive(&shmem_lock);
         if (!handled) return 0;
         c->x[0] = 0;
@@ -268,8 +373,26 @@ int scarlet_memory_svc(Ctx *c, uint32_t n) {
     if (n == 6) {
         handled = 0;
         uint64_t addr = c->x[2];
+        AcquireSRWLockShared(&tmem_lock);
+        for (unsigned i = 0; i < TMEM_LIMIT; ++i) {
+            TransferMem *m = &tmem[i];
+            if (m->size && addr >= m->src && addr - m->src < m->size) {
+                /* Source remains its normal heap mapping but is marked Borrowed,
+                 * with the permission requested by CreateTransferMemory. */
+                uint64_t info[5] = {m->src, m->size, 5 | (1ULL << 32), m->owner_perm, 0};
+                memcpy((void *)(uintptr_t)c->x[0], info, sizeof info);
+                c->x[0] = 0; c->x[1] = 0; handled = 1; break;
+            }
+            if (m->mapped_addr && addr >= m->mapped_addr && addr - m->mapped_addr < m->size) {
+                uint64_t info[5] = {m->mapped_addr, m->size,
+                                    m->owner_perm ? 0x0e : 0x0d, m->mapped_perm, 0};
+                memcpy((void *)(uintptr_t)c->x[0], info, sizeof info);
+                c->x[0] = 0; c->x[1] = 0; handled = 1; break;
+            }
+        }
+        ReleaseSRWLockShared(&tmem_lock);
         AcquireSRWLockShared(&shmem_lock);
-        for (unsigned i = 0; i < SHMEM_LIMIT; ++i) {
+        for (unsigned i = 0; !handled && i < SHMEM_LIMIT; ++i) {
             SharedMem *m = &shmem[i];
             if (m->mapped_addr && addr >= m->mapped_addr && addr - m->mapped_addr < m->size) {
                 uint64_t info[5] = {m->mapped_addr, m->size, 6, 3, 0};
