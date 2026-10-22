@@ -33,12 +33,20 @@ enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESS
        SERVICE_AUDIO, SERVICE_DISPLAY, SERVICE_WINDING, SERVICE_LIBRARY, SERVICE_APPLICATION, SERVICE_DEBUG,
        SERVICE_AOC, SERVICE_ECTX_AW, SERVICE_ECTX_REGISTRAR, SERVICE_PCTL, SERVICE_PCTL_CONTROL,
        SERVICE_FSP, SERVICE_FSP_STORAGE, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
-       SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS };
+       SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS,
+       SERVICE_AUDREN, SERVICE_AUDREN_RENDERER, SERVICE_AUDREN_DEVICE };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 static const unsigned char scarlet_clock_uuid[16] =
     {0x4c,0x41,0x52,0x65,0x63,0x6f,0x6d,0x70,1,2,3,4,5,6,7,8};
 static uint32_t time_shmem_handle, hid_shmem_handle;
 static uint32_t hid_supported_styles = 0x1f;
+/* Scarlet's nn::audio renderer is an IPC service (audren:u), separate from the
+ * game's later PCM/Opus paths. Keep a lightweight host-side model so the SDK
+ * can boot before full audio rendering is connected to SDL. */
+static HANDLE audren_frame_timer;
+static uint32_t audren_sample_rate = 48000, audren_sample_count = 240, audren_mix_buffers = 2;
+static uint32_t audren_rendering_limit = 100;
+static int audren_active;
 
 static int64_t scarlet_steady_seconds(void) {
     extern uint64_t guest_cntpct(void);
@@ -126,6 +134,24 @@ static uint32_t copy_event(HANDLE event) {
     if (!h) { CloseHandle(copy); return 0; }
     events[h - HANDLE_BASE] = copy;
     return h;
+}
+
+static uint32_t scarlet_audren_frame_event(void) {
+    if (!audren_frame_timer) {
+        /* Horizon's audio-renderer frame event ticks every ~5 ms (200 Hz).
+         * A waitable timer behaves like a kernel wait object for our SVC bridge
+         * without burning a host thread or spinning the guest. */
+        audren_frame_timer = CreateWaitableTimerW(NULL, FALSE, NULL);
+        if (audren_frame_timer) {
+            LARGE_INTEGER due;
+            due.QuadPart = -50000; /* 5 ms in 100-ns units, relative */
+            if (!SetWaitableTimer(audren_frame_timer, &due, 5, NULL, NULL, FALSE)) {
+                CloseHandle(audren_frame_timer);
+                audren_frame_timer = NULL;
+            }
+        }
+    }
+    return audren_frame_timer ? copy_event(audren_frame_timer) : 0;
 }
 
 static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
@@ -234,6 +260,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
                 moved = new_session(SERVICE_TIME);
             else if (!strcmp(name, "hid")) moved = new_session(SERVICE_HID);
             else if (!strcmp(name, "hid:sys")) moved = new_session(SERVICE_HID_SYS);
+            else if (!strcmp(name, "audren:u")) moved = new_session(SERVICE_AUDREN);
             else if (!strcmp(name, "pctl") || !strcmp(name, "pctl:a") ||
                      !strcmp(name, "pctl:r") || !strcmp(name, "pctl:s"))
                 moved = new_session(SERVICE_PCTL);
@@ -476,6 +503,82 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
              * input bridged outside Horizon HID, matching scarlet_pc. */
         } else if (service == SERVICE_HID_SYS) {
             memset(out_data, 0, 0x10); out_ptr = out_data; data_size = 0x10;
+        } else if (service == SERVICE_AUDREN) {
+            /* IAudioRendererManager. Command layout follows Horizon/libnx:
+             * 0 OpenAudioRenderer, 1 GetWorkBufferSize, 2/4 audio-device service. */
+            if (cmd == 1) {
+                /* The compatibility renderer does not consume transfer memory,
+                 * but the SDK requires a page-aligned work buffer before it can
+                 * open the renderer. Eight MiB comfortably covers Scarlet's
+                 * configuration while remaining cheap on the host. */
+                value = 8ull << 20;
+                data_size = 8;
+            } else if (cmd == 0) {
+                if (input_size >= 0x0c) {
+                    audren_sample_rate = data[0] ? data[0] : 48000;
+                    audren_sample_count = data[1] ? data[1] : 240;
+                    audren_mix_buffers = data[2] ? data[2] : 2;
+                }
+                audren_active = 0;
+                moved = new_session(SERVICE_AUDREN_RENDERER);
+                if (!moved) result = 0xd201;
+                trace_printf("Scarlet audren OpenAudioRenderer rate=%u samples=%u mixes=%u\n",
+                             audren_sample_rate, audren_sample_count, audren_mix_buffers);
+            } else if (cmd == 2 || cmd == 4) {
+                moved = new_session(SERVICE_AUDREN_DEVICE);
+                if (!moved) result = 0xd201;
+            } else goto unsupported;
+        } else if (service == SERVICE_AUDREN_RENDERER) {
+            /* IAudioRenderer. This is deliberately silent for now; it preserves
+             * timing and IPC contracts so graphics/gameplay boot is independent
+             * of the unfinished audio mixer. */
+            if (cmd == 0) { value = audren_sample_rate; data_size = 4; }
+            else if (cmd == 1) { value = audren_sample_count; data_size = 4; }
+            else if (cmd == 2) { value = audren_mix_buffers; data_size = 4; }
+            else if (cmd == 3) { value = audren_active ? 0 : 1; data_size = 4; }
+            else if (cmd == 4 || cmd == 10) {
+                /* RequestUpdate / RequestUpdateAuto: the output state starts
+                 * zeroed. The audio client can continue advancing its own voice
+                 * bookkeeping while no host samples are emitted yet. */
+                if (out_buf_addr && out_buf_size)
+                    memset((void *)(uintptr_t)out_buf_addr, 0, (size_t)out_buf_size);
+            } else if (cmd == 5) audren_active = 1;
+            else if (cmd == 6) audren_active = 0;
+            else if (cmd == 7) {
+                copied = scarlet_audren_frame_event();
+                if (!copied) result = 0xd201;
+            } else if (cmd == 8) {
+                if (input_size >= 4) audren_rendering_limit = data[0];
+            } else if (cmd == 9) {
+                value = audren_rendering_limit; data_size = 4;
+            } else if (cmd == 11) {
+                /* Manual execute; auto mode is what Scarlet normally uses. */
+            } else if (cmd == 12 || cmd == 13) {
+                /* Voice-drop parameter (newer SDKs). Store/return a harmless 0. */
+                if (cmd == 13) { value = 0; data_size = 4; }
+            } else goto unsupported;
+        } else if (service == SERVICE_AUDREN_DEVICE) {
+            /* IAudioDevice: expose one stable host device name. */
+            if (cmd == 0 || cmd == 6) {
+                if (out_buf_addr && out_buf_size) {
+                    size_t n = (size_t)out_buf_size;
+                    memset((void *)(uintptr_t)out_buf_addr, 0, n);
+                    memcpy((void *)(uintptr_t)out_buf_addr, "MainAudioOut",
+                           n < sizeof("MainAudioOut") ? n : sizeof("MainAudioOut"));
+                }
+                value = 1; data_size = 4;
+            } else if (cmd == 1 || cmd == 7) {
+                /* SetAudioDeviceOutputVolume: accepted; actual mixer hookup later. */
+            } else if (cmd == 2 || cmd == 8) {
+                float one = 1.0f; memcpy(&value, &one, sizeof one); data_size = 4;
+            } else if (cmd == 3 || cmd == 10) {
+                if (out_buf_addr && out_buf_size) {
+                    size_t n = (size_t)out_buf_size;
+                    memset((void *)(uintptr_t)out_buf_addr, 0, n);
+                    memcpy((void *)(uintptr_t)out_buf_addr, "MainAudioOut",
+                           n < sizeof("MainAudioOut") ? n : sizeof("MainAudioOut"));
+                }
+            } else goto unsupported;
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
             if (!moved) result = 0xd201;
