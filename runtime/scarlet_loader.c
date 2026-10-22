@@ -282,17 +282,23 @@ static uint64_t resolve_symbol(ScarletStaticModule *m, uint32_t symidx) {
     if (s->shndx) return m->base + s->value;
     const char *name = module_sym_name(m, s);
 
-    /* main's existing host-data overrides (sdkdata.c) and the four
-     * profile-validated host fast paths keep their original dynsym index. */
+    /* Only the explicitly selected host functions use main's dynsym slots.
+     * The complete Scarlet SDK owns its data objects. In particular libc++'s
+     * locale::id objects must be shared with that SDK's facet registry, rather
+     * than nncxxlib.c's separate HLE registry (used by the partial SSBU SDK).
+     * A host data override is only a fallback for a symbol absent from ExeFS. */
     if (m == &g_scarlet_static_modules[0]) {
-        uint64_t override = import_address_override((int)symidx);
-        if (override) return override;
         if (main_host_override(name))
             return IMPORT_BASE + (uint64_t)symidx * IMPORT_SLOT;
     }
 
     uint64_t target = scarlet_find_static_symbol(name);
     if (target) return target;
+
+    if (m == &g_scarlet_static_modules[0]) {
+        uint64_t override = import_address_override((int)symidx);
+        if (override) return override;
+    }
 
     if ((s->info >> 4) == 2) return 0; /* STB_WEAK */
 
