@@ -110,17 +110,31 @@ static uint32_t transfer_create(uint64_t src, uint64_t size, uint32_t perm, uint
     if (!out_h || !src || (src & 0xfff) || !size || (size & 0xfff) || src + size < src)
         return 0xcc01;
     if (perm != 0 && perm != 1 && perm != 3) return 0xd801;
-    /* The range must already be committed guest memory. Check every Windows
-     * virtual region it crosses; an aligned allocator can span more than one. */
-    uint64_t p = src, end = src + size;
-    while (p < end) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (!VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
-            (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-            return 0xdc01;
-        uint64_t next = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= p) return 0xdc01;
-        p = next < end ? next : end;
+
+    /* The game's heap is one Horizon mapping, even though Windows may split the
+     * backing allocation into several VirtualQuery regions as it grows. Do not
+     * reject a valid Horizon transfer-memory range merely because those host
+     * regions differ. This is exactly what Scarlet's 8 MiB audren work buffer
+     * does. For non-heap sources retain strict host-page validation. */
+    extern int scarlet_heap_range_valid(uint64_t, uint64_t);
+    if (!scarlet_heap_range_valid(src, size)) {
+        uint64_t p = src, end = src + size;
+        while (p < end) {
+            MEMORY_BASIC_INFORMATION mi;
+            if (!VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ||
+                mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                printf("Scarlet CreateTransferMemory rejected host range at %llx "
+                       "(src=%llx size=%llx state=%lx protect=%lx)\n",
+                       (unsigned long long)p, (unsigned long long)src,
+                       (unsigned long long)size,
+                       (unsigned long)(VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ? mi.State : 0),
+                       (unsigned long)(VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ? mi.Protect : 0));
+                return 0xdc01;
+            }
+            uint64_t next = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
+            if (next <= p) return 0xdc01;
+            p = next < end ? next : end;
+        }
     }
     unsigned slot = 0;
     while (slot < TMEM_LIMIT && tmem[slot].size) ++slot;
