@@ -33,6 +33,7 @@ typedef struct {
     uint32_t cbufs, in_attr, out_attr, tex_units, clip_out, ssbos;
     uint8_t regs[256], preds[8], in_comp[32], in_mode[32];
     int uses_gmem, uses_gstore, uses_cc, uses_layer_out, uses_vp_out, uses_psize, uses_lmem, insns, blocks, any_jump, uses_alpha;
+    int uses_subgroup;                         /* SHFL: subgroup invocation ID + shuffle operations */
     uint8_t *reach, *leader;
     const uint8_t *base;                      /* instruction word 0 (a scheduling word) */
     uint32_t gubos;                           /* compute: uniform buffers reached through global memory */
@@ -968,6 +969,37 @@ static void insn(Mx *e, unsigned pc, uint64_t i) {
         emit(e, "%s = %s ? %s : %s;", DST, ICMP(e, MXB(i, 49, 3), (int)MXB(i, 48, 1), operand, "0u"), A8, sa);
         break;
     }
+    case MXOP_SHFL: {
+        /* Maxwell warp shuffle. The guest warp is 32 lanes even on a host with a
+         * 64-lane subgroup, so keep each 32-lane partition independent. Semantics
+         * and field layout follow the Maxwell SHFL instruction: bits 28/29 select
+         * immediate index/mask, bits 30..31 select IDX/UP/DOWN/BFLY, and bits
+         * 48..50 receive the in-bounds predicate. */
+        unsigned mode = MXB(i, 30, 2), pd = MXB(i, 48, 3);
+        const char *idx = MXB(i, 28, 1) ? S(e, "%uu", MXB(i, 20, 5)) : R20;
+        const char *mask = MXB(i, 29, 1) ? S(e, "%uu", MXB(i, 34, 13)) : R39;
+        const char *lane = e->in->target == 1 ? "gl_SubgroupInvocationID" : "gl_SubGroupInvocationARB";
+        const char *shuffle = e->in->target == 1 ? "subgroupShuffle" : "readInvocationARB";
+        e->uses_subgroup = 1;
+        emit(e, "uint shv = %s, shi = %s, shm = %s, shl = uint(%s) & 31u, shb = uint(%s) & ~31u;"
+                " uint shc = shm & 31u, shs = (shm >> 8) & 31u, shmin = shl & shs;"
+                " uint shmax = shmin | (shc & ~shs), shsrc = 0u; bool shin = false;",
+             A8, idx, mask, lane, lane);
+        if (mode == 0)
+            emit(e, " shsrc = (shi & ~shs) | shmin; shin = int(shsrc) <= int(shmax);");
+        else if (mode == 1)
+            emit(e, " shsrc = shl - shi; shin = int(shsrc) >= int(shmax);");
+        else if (mode == 2)
+            emit(e, " shsrc = shl + shi; shin = int(shsrc) <= int(shmax);");
+        else
+            emit(e, " shsrc = shl ^ shi; shin = int(shsrc) <= int(shmax);");
+        /* Execute the subgroup operation uniformly and select the original value
+         * when Maxwell reports the source as out of bounds. */
+        emit(e, " uint shgot = %s(shv, shb + (shsrc & 31u)); %s = shin ? shgot : shv;",
+             shuffle, DST);
+        if (PD(e, pd)) emit(e, " %s = shin;", PD(e, pd));
+        break;
+    }
     case MXOP_SHL_reg: case MXOP_SHL_cbuf: case MXOP_SHL_imm:
         if (MXB(i, 43, 1) || MXB(i, 47, 1)) { fail(e, "SHL.X/CC", "SHL with X or CC"); break; }
         b = op == MXOP_SHL_reg ? R20 : op == MXOP_SHL_cbuf ? CB(e, i) : I20(e, i);
@@ -1550,8 +1582,11 @@ int mx_translate(const MxIn *in, MxOut *out) {
         if (in->stage == MX_VERTEX) e->out_attr |= in->force_out;      /* declared and set to (0, 0, 0, 1) below */
         const int vk = in->target == 1;
         const char *set0 = vk ? "set = 0, " : "", *set1 = vk ? "set = 1, " : "";
-        if (vk) emit(&h, "#version 460\n#extension GL_ARB_gpu_shader_int64 : enable\n#extension GL_EXT_texture_shadow_lod : enable\n");
-        else
+        if (vk) {
+            emit(&h, "#version 460\n#extension GL_ARB_gpu_shader_int64 : enable\n#extension GL_EXT_texture_shadow_lod : enable\n");
+            if (e->uses_subgroup)
+                emit(&h, "#extension GL_KHR_shader_subgroup_basic : require\n#extension GL_KHR_shader_subgroup_shuffle : require\n");
+        } else
         emit(&h, "#version 460 compatibility\n#extension GL_ARB_bindless_texture : require\n#extension GL_NV_gpu_shader5 : enable\n#extension GL_ARB_gpu_shader_int64 : enable\n"
                  "#extension GL_ARB_shader_ballot : enable\n#extension GL_ARB_shader_group_vote : enable\n#extension GL_EXT_texture_shadow_lod : enable\n");
         if (e->uses_layer_out || e->uses_vp_out) emit(&h, "#extension GL_ARB_shader_viewport_layer_array : require\n");
