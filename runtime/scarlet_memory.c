@@ -9,8 +9,60 @@
 #define STACK_SIZE 0x40000000ULL
 static SRWLOCK map_lock = SRWLOCK_INIT;
 static void *stack_reservation;
+static uint64_t bootstrap_stack_base, bootstrap_stack_size;
+
+/* HIPC descriptors carry only 39 address bits. ASLR can place VirtualAlloc(NULL)
+ * above that limit, so guest-visible bootstrap pointers need low reservations. */
+static SRWLOCK guest_alloc_lock = SRWLOCK_INIT;
+static uint64_t guest_alloc_next = 0x7080000000ULL;
+void *scarlet_guest_alloc(size_t size) {
+    uint64_t rounded = ((uint64_t)size + 0xffff) & ~0xffffULL;
+    if (!size || rounded < size || rounded > 0x10000000) return NULL;
+    AcquireSRWLockExclusive(&guest_alloc_lock);
+    void *p = NULL;
+    while (guest_alloc_next <= 0x7090000000ULL - rounded) {
+        uint64_t addr = guest_alloc_next;
+        guest_alloc_next += rounded;
+        p = VirtualAlloc((void *)(uintptr_t)addr, (SIZE_T)rounded, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (p) break;
+    }
+    ReleaseSRWLockExclusive(&guest_alloc_lock);
+    return p;
+}
+void *scarlet_bootstrap_stack_reserve(size_t size) {
+    if (!size || size > STACK_SIZE || (size & 0xfff)) return NULL;
+    size = (size + 0xffff) & ~(size_t)0xffff;
+    AcquireSRWLockExclusive(&map_lock);
+    if (!stack_reservation)
+        stack_reservation = VirtualAlloc((void *)(uintptr_t)STACK_BASE, STACK_SIZE, MEM_RESERVE, PAGE_NOACCESS);
+    void *p = NULL;
+    if (stack_reservation && !bootstrap_stack_size) {
+        bootstrap_stack_size = size;
+        bootstrap_stack_base = STACK_BASE + STACK_SIZE - size;
+        p = (void *)(uintptr_t)bootstrap_stack_base;
+    }
+    ReleaseSRWLockExclusive(&map_lock);
+    return p;
+}
 typedef struct { uint64_t dst, src, size; DWORD protection; } StackMap;
 static StackMap stack_maps[256];
+
+/* Horizon's virtual-address allocator asks for a contiguous free span before
+ * issuing MapMemory. A Windows reservation without committed pages is still
+ * guest-free; returning a fabricated 64KiB chunk rejects larger thread stacks. */
+int scarlet_query_free_region(uint64_t addr, uint64_t info[5]) {
+    MEMORY_BASIC_INFORMATION mi;
+    const uint64_t address_limit = 1ULL << 39;
+    if (addr >= address_limit || !VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi) || mi.State == MEM_COMMIT) return 0;
+    uint64_t base = (uint64_t)(uintptr_t)mi.BaseAddress;
+    uint64_t size = mi.RegionSize;
+    if (size > address_limit - base) size = address_limit - base;
+    if (bootstrap_stack_size && addr < bootstrap_stack_base && base + size > bootstrap_stack_base)
+        size = bootstrap_stack_base - base;
+    memset(info, 0, 5 * sizeof *info);
+    info[0] = base; info[1] = size;
+    return 1;
+}
 
 /* Minimal Horizon shared-memory objects for time:u / hid. */
 #define SHMEM_BASE 0x30000u
@@ -132,6 +184,7 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
     if ((dst | src) & 0xfff) return 0xcc01;
     if (!size || (size & 0xfff)) return 0xca01;
     if (dst < STACK_BASE || size > STACK_SIZE || dst - STACK_BASE > STACK_SIZE - size || src + size < src) return 0xdc01;
+    if (bootstrap_stack_size && dst < bootstrap_stack_base + bootstrap_stack_size && dst + size > bootstrap_stack_base) return 0xdc01;
     StackMap *slot = NULL;
     if (unmap) {
         for (unsigned i = 0; i < 256; ++i) if (stack_maps[i].dst == dst && stack_maps[i].src == src && stack_maps[i].size == size) {

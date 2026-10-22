@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <setjmp.h>
 #include "hostrt.h"
+void *scarlet_guest_alloc(size_t);
 #define THREAD_BASE 0x20000u
 #define THREAD_LIMIT 256
 #define MAIN_THREAD_HANDLE 0x80u
@@ -83,8 +84,8 @@ int scarlet_thread_svc(Ctx *c, uint32_t n) {
                 t->refs = 1; t->entry = x[1]; t->ctx.x[0] = x[2]; t->ctx.x[31] = x[3];
                 t->priority = priority; t->core = core == -2 ? 0 : core; t->mask = 1ULL << t->core;
                 t->id = next_id++;
-                t->tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-                t->tlr = VirtualAlloc(NULL, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                t->tls = scarlet_guest_alloc(0x10000);
+                t->tlr = scarlet_guest_alloc(0x1000);
                 t->done = CreateEventW(NULL, TRUE, FALSE, NULL);
                 if (!t->tls || !t->tlr || !t->done) { release_thread(t); t = NULL; }
             }

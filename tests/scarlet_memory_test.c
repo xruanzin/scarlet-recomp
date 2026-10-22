@@ -22,8 +22,13 @@ int main(void) {
     c.x[0] = dst; c.x[1] = from; c.x[2] = 0x1000;
     scarlet_memory_svc(&c, 5); assert(c.x[0] == 0 && src[0] == 0xa5);
     VirtualQuery((void *)(uintptr_t)dst, &info, sizeof info); assert(info.State == MEM_RESERVE);
+    memset(mi, 0xff, sizeof mi);
+    assert(scarlet_query_free_region(dst, mi));
+    assert(mi[0] <= dst && mi[0] + mi[1] > dst && mi[2] == 0 && mi[3] == 0);
     c.x[0] = dst + 0x1000; c.x[1] = from + 0x1000; c.x[2] = 0x1000;
     scarlet_memory_svc(&c, 5); assert(c.x[0] == 0);
+    assert(scarlet_query_free_region(STACK_BASE + 0x100000, mi));
+    assert(mi[1] > 0x10000); /* large SDK stack searches need the full gap */
     c.x[0] = dst + 1; c.x[1] = from; c.x[2] = 0x1000;
     scarlet_memory_svc(&c, 4); assert(c.x[0] == 0xcc01);
     c.x[0] = dst; c.x[1] = from; c.x[2] = 0;
@@ -52,6 +57,19 @@ int main(void) {
     memset((void *)(uintptr_t)shared, 0x42, 0x40000);
     assert(shared_close(wide));
     VirtualQuery((void *)(uintptr_t)(shared + 0x30000), &info, sizeof info); assert(info.State == MEM_FREE);
+    unsigned char *tls = scarlet_guest_alloc(0x10000);
+    assert(tls && (uintptr_t)tls < (1ULL << 39));
+    uint64_t address = (uintptr_t)tls;
+    uint32_t d1 = (uint32_t)address;
+    uint32_t d2 = (uint32_t)(((address >> 32) & 15) << 28) | (uint32_t)(((address >> 36) & 7) << 2);
+    assert((d1 | ((uint64_t)(d2 >> 28) << 32) | ((uint64_t)((d2 >> 2) & 7) << 36)) == address);
+    VirtualFree(tls, 0, MEM_RELEASE);
+    unsigned char *boot = scarlet_bootstrap_stack_reserve(0x120000);
+    assert(boot && (uintptr_t)boot >= STACK_BASE && (uintptr_t)boot + 0x120000 <= STACK_BASE + STACK_SIZE);
+    assert(VirtualAlloc(boot + 0x10000, 0x100000, MEM_COMMIT, PAGE_READWRITE) == boot + 0x10000);
+    VirtualQuery(boot, &info, sizeof info); assert(info.State == MEM_RESERVE);
+    VirtualQuery(boot + 0x110000, &info, sizeof info); assert(info.State == MEM_RESERVE);
+    assert(scarlet_query_free_region(STACK_BASE + 0x100000, mi) && mi[0] + mi[1] <= (uintptr_t)boot);
     puts("Scarlet memory: 4KiB map, shared reservation, protection, copyback, query and validation passed");
     return 0;
 }

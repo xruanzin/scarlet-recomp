@@ -367,14 +367,21 @@ static DWORD WINAPI guest_main(LPVOID arg) {
      * moves the guest SP exactly as the ARM code does); the host's own frames live on the host stack and are not
      * guest-visible. SSBU_MAIN_STACK=<bytes> overrides (diagnosis only). */
     size_t stack_size = main_stack_size_from_npdm();
+#ifdef SCARLET_RECOMP
+    extern void *scarlet_bootstrap_stack_reserve(size_t);
+    extern void *scarlet_guest_alloc(size_t);
+    uint8_t *stack_res = scarlet_bootstrap_stack_reserve(stack_size + 0x20000);
+#else
     uint8_t *stack_res = VirtualAlloc(NULL, stack_size + 0x20000, MEM_RESERVE, PAGE_NOACCESS);
+#endif
     uint8_t *stack = stack_res ? VirtualAlloc(stack_res + 0x10000, stack_size, MEM_COMMIT, PAGE_READWRITE) : NULL;
     if (!stack) { fprintf(stderr, "cannot allocate the main thread's stack (0x%llx bytes)\n", (unsigned long long)stack_size); exit(1); }
-    uint8_t *tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 #ifdef SCARLET_RECOMP
-    uint8_t *tlr = VirtualAlloc(NULL, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    uint8_t *tls = scarlet_guest_alloc(0x10000);
+    uint8_t *tlr = scarlet_guest_alloc(0x1000);
     if (!tls || !tlr) { fprintf(stderr, "cannot allocate Scarlet main TLS/TLR\n"); exit(1); }
 #else
+    uint8_t *tls = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!tls) { fprintf(stderr, "cannot allocate main TLS\n"); exit(1); }
 #endif
     c.x[31] = (uint64_t)(stack + stack_size);          /* the initial SP is the top of the stack (16-byte aligned: the size is whole pages) */

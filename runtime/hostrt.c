@@ -1049,7 +1049,10 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
                 info[2] = 5;
                 info[3] = (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) ? 3 : 1;
             } else {
-                info[0] = a & ~0xffffULL; info[1] = 0x10000; /* unmapped span, conservative */
+                extern int scarlet_query_free_region(uint64_t, uint64_t[5]);
+                if (!scarlet_query_free_region(a, info)) {
+                    info[0] = a & ~0xfffULL; info[1] = 0x1000;
+                }
             }
         }
         memcpy((void *)(uintptr_t)out, info, sizeof info);
