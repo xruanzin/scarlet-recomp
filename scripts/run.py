@@ -297,9 +297,14 @@ def main():
                         q = run_text.rfind(marker)
                         if q > pos:
                             pos = q
-                    if pos < 0:
+                    if pos >= 0:
+                        # Include the operation immediately preceding the trap:
+                        # SVC/IPC diagnostics often print the actual failing
+                        # Result a few lines before Nintendo's abort path.
+                        pos = max(0, pos - 2500)
+                    else:
                         q = run_text.rfind('HOST EXCEPTION')
-                        pos = max(0, q - 1200) if q >= 0 else max(0, len(run_text) - 12000)
+                        pos = max(0, q - 2500) if q >= 0 else max(0, len(run_text) - 12000)
                     excerpt = run_text[pos:]
                     if len(excerpt) > 12000:
                         excerpt = excerpt[:12000] + '\n... [fatal excerpt truncated] ...\n'
