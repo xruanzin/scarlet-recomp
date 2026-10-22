@@ -48,6 +48,82 @@ static uint32_t audren_sample_rate = 48000, audren_sample_count = 240, audren_mi
 static uint32_t audren_rendering_limit = 100;
 static int audren_active;
 
+static uint64_t align_up_u64(uint64_t v, uint64_t a) {
+    return (v + a - 1) & ~(a - 1);
+}
+
+/* audren:u GetWorkBufferSize. AudioRendererParameter is 0x34 bytes:
+ * rate, samples, mix buffers, submixes, voices, sinks, effects, performance
+ * frames, 4 flag bytes, splitter count, splitter-send count, reserved, revision.
+ *
+ * The arithmetic below follows the public Horizon audren sizing model used by
+ * Switch implementations. Our bootstrap renderer is silent and does not
+ * consume this transfer memory, so keep a 16 MiB compatibility floor as a
+ * guard against revision-specific additions in Scarlet's SDK. The previous
+ * hard-coded 8 MiB value was proven too small: the guest wrote exactly at
+ * work_buffer + 0x800000 during OpenAudioRenderer. */
+static uint64_t scarlet_audren_work_buffer_size(const uint32_t *p, size_t bytes) {
+    const uint64_t compat_floor = 16ull << 20;
+    if (!p || bytes < 0x34) return compat_floor;
+
+    uint64_t sample_count   = p[1];
+    uint64_t mix_count      = p[2];
+    uint64_t submix_count   = p[3];
+    uint64_t voice_count    = p[4];
+    uint64_t sink_count     = p[5];
+    uint64_t effect_count   = p[6];
+    uint64_t perf_frames    = p[7];
+    uint64_t splitter_count = p[9];
+    uint64_t splitter_sends = p[10];
+    uint32_t revision       = p[12];
+
+    /* Legacy/public audren formula. It remains a useful lower-bound for newer
+     * revisions even when extra structures have been added. */
+    uint64_t sz = align_up_u64(4 * mix_count, 0x40);
+    sz += submix_count * 1024;
+    sz += 0x940 * (submix_count + 1);
+    sz += 0x3f0 * voice_count;
+    sz += align_up_u64(8 * (submix_count + 1), 0x10);
+    sz += align_up_u64(8 * voice_count, 0x10);
+    sz += align_up_u64((0x3c0 * (sink_count + submix_count) + 4 * sample_count) *
+                       (mix_count + 6), 0x40);
+
+    /* REV2+ supports splitter state. Revision is little-endian 'REVn'. */
+    unsigned rev_num = 0;
+    if ((revision & 0x00ffffffu) == 0x00564552u) {
+        unsigned ch = (revision >> 24) & 0xffu;
+        if (ch >= '0' && ch <= '9') rev_num = ch - '0';
+        else if (ch >= 'A' && ch <= 'Z') rev_num = 10u + ch - 'A';
+    }
+    if (rev_num >= 2) {
+        uint64_t count = submix_count + 1;
+        uint64_t nodes = align_up_u64(count, 0x40);
+        uint64_t node_state = 4 * (nodes * nodes) + 0x0c * nodes + 2 * (nodes / 8);
+        uint64_t matrix_nodes = align_up_u64(count * count, 0x40);
+        uint64_t edge_matrix = matrix_nodes / 8;
+        sz += align_up_u64(node_state + edge_matrix, 0x10);
+    }
+
+    sz += 0x20 * (effect_count + 4 * voice_count) + 0x50;
+    if (rev_num >= 2) {
+        sz += 0xe0 * splitter_sends;
+        sz += 0x20 * splitter_count;
+        sz += align_up_u64(4 * splitter_sends, 0x10);
+    }
+    sz = align_up_u64(sz, 0x40) + 0x170 * sink_count;
+    sz += 0x280 * sink_count + 0x4b0 * effect_count + ((voice_count * 256) | 0x40);
+
+    if (perf_frames >= 1) {
+        sz += align_up_u64(((16 * sink_count + 16 * effect_count +
+                            16 * voice_count + 16) + 0x658) *
+                           (perf_frames + 1) + 0xc0, 0x40);
+    }
+    sz = align_up_u64(sz + 0x1807e, 0x1000);
+
+    if (sz < compat_floor) sz = compat_floor;
+    return sz;
+}
+
 static int64_t scarlet_steady_seconds(void) {
     extern uint64_t guest_cntpct(void);
     return (int64_t)(guest_cntpct() / 19200000ULL);
@@ -507,12 +583,21 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             /* IAudioRendererManager. Command layout follows Horizon/libnx:
              * 0 OpenAudioRenderer, 1 GetWorkBufferSize, 2/4 audio-device service. */
             if (cmd == 1) {
-                /* The compatibility renderer does not consume transfer memory,
-                 * but the SDK requires a page-aligned work buffer before it can
-                 * open the renderer. Eight MiB comfortably covers Scarlet's
-                 * configuration while remaining cheap on the host. */
-                value = 8ull << 20;
+                uint64_t calc = scarlet_audren_work_buffer_size(data, input_size);
+                value = calc;
                 data_size = 8;
+                if (input_size >= 0x34) {
+                    trace_printf("Scarlet audren GetWorkBufferSize rate=%u samples=%u mixes=%u submix=%u voices=%u sinks=%u effects=%u perf=%u splitters=%u sends=%u revision=%08x -> %llx\n",
+                                 data[0], data[1], data[2], data[3], data[4], data[5],
+                                 data[6], data[7], data[9], data[10], data[12],
+                                 (unsigned long long)calc);
+                    printf("Scarlet audren GetWorkBufferSize rate=%u samples=%u mixes=%u submix=%u voices=%u sinks=%u effects=%u perf=%u revision=%08x -> %llx\n",
+                           data[0], data[1], data[2], data[3], data[4], data[5],
+                           data[6], data[7], data[12], (unsigned long long)calc);
+                } else {
+                    printf("Scarlet audren GetWorkBufferSize short parameter block (%zu bytes) -> %llx\n",
+                           input_size, (unsigned long long)calc);
+                }
             } else if (cmd == 0) {
                 if (input_size >= 0x0c) {
                     audren_sample_rate = data[0] ? data[0] : 48000;
