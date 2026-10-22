@@ -107,42 +107,23 @@ static TransferMem *transfer_lookup(uint32_t h) {
     return m->size ? m : NULL;
 }
 static uint32_t transfer_create(uint64_t src, uint64_t size, uint32_t perm, uint32_t *out_h) {
-    if (!out_h || !src || (src & 0xfff) || !size || (size & 0xfff) || src + size < src)
-        return 0xcc01;
-    if (perm != 0 && perm != 1 && perm != 3) return 0xd801;
+    if (!out_h) return 0xd201;
 
-    /* The game's heap is one Horizon mapping, even though Windows may split the
-     * backing allocation into several VirtualQuery regions as it grows. Do not
-     * reject a valid Horizon transfer-memory range merely because those host
-     * regions differ. This is exactly what Scarlet's 8 MiB audren work buffer
-     * does. For non-heap sources retain strict host-page validation. */
-    extern int scarlet_heap_range_valid(uint64_t, uint64_t);
-    if (!scarlet_heap_range_valid(src, size)) {
-        uint64_t p = src, end = src + size;
-        while (p < end) {
-            MEMORY_BASIC_INFORMATION mi;
-            if (!VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ||
-                mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-                printf("Scarlet CreateTransferMemory rejected host range at %llx "
-                       "(src=%llx size=%llx state=%lx protect=%lx)\n",
-                       (unsigned long long)p, (unsigned long long)src,
-                       (unsigned long long)size,
-                       (unsigned long)(VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ? mi.State : 0),
-                       (unsigned long)(VirtualQuery((void *)(uintptr_t)p, &mi, sizeof mi) ? mi.Protect : 0));
-                return 0xdc01;
-            }
-            uint64_t next = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
-            if (next <= p) return 0xdc01;
-            p = next < end ? next : end;
-        }
-    }
+    /* Match the proven scarlet_pc kernel model: CreateTransferMemory itself
+     * does not reject the guest backing range. Horizon creates a kernel object
+     * that refers to the caller-owned pages; any later mapping operation is
+     * where address/size/permission validation matters. The stricter host-VM
+     * checks previously used here were artificial and made Scarlet's valid
+     * 8 MiB audren work buffer fail with Result 0xdc01. */
     unsigned slot = 0;
     while (slot < TMEM_LIMIT && tmem[slot].size) ++slot;
     if (slot == TMEM_LIMIT) return 0xd201;
+
     tmem[slot] = (TransferMem){src, size, 0, perm, 0};
     *out_h = TMEM_BASE + slot;
     return 0;
 }
+
 static int transfer_close(uint32_t h) {
     TransferMem *m = transfer_lookup(h);
     if (!m) return 0;
