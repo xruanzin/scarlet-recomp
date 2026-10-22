@@ -341,6 +341,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             else if (!strcmp(name, "hid")) moved = new_session(SERVICE_HID);
             else if (!strcmp(name, "hid:sys")) moved = new_session(SERVICE_HID_SYS);
             else if (!strcmp(name, "audren:u")) moved = new_session(SERVICE_AUDREN);
+            else if (!strcmp(name, "set")) moved = new_session(SERVICE_SET);
             else if (!strcmp(name, "pctl") || !strcmp(name, "pctl:a") ||
                      !strcmp(name, "pctl:r") || !strcmp(name, "pctl:s"))
                 moved = new_session(SERVICE_PCTL);
