@@ -1274,8 +1274,13 @@ def lift_function(env, entry):
     out = ['void f_%x(Ctx *c) {' % entry, '  c->fn = 0x%xULL;' % entry]   # for crash reports
     if fn.has_br:
         out.append('  uint64_t jt = 0;')
+    trace_pc_raw = os.environ.get('RECOMP_TRACE_PC_FUNCTION', '')
+    trace_pc_entry = int(trace_pc_raw, 0) if trace_pc_raw else 0
     for pc, stmt in lines:
-        out.append('L_%x: %s' % (pc, stmt))
+        if entry == trace_pc_entry:
+            out.append('L_%x: c->fn = 0x%xULL; %s' % (pc, pc, stmt))
+        else:
+            out.append('L_%x: %s' % (pc, stmt))
     out.append('  f_%x(c); return;' % end if end < BASE + TEXT_SIZE and not lines[-1][1].startswith(('return;', 'goto', '{ jt', '{ f_', '{ imp_', '{ h_')) else '  return;')
     if fn.has_br:
         out.append('L_dispatch: switch (jt) {')
