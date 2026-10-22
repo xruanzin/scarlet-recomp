@@ -719,6 +719,15 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
                     memcpy((void *)(uintptr_t)out_buf_addr, "MainAudioOut",
                            n < sizeof("MainAudioOut") ? n : sizeof("MainAudioOut"));
                 }
+            } else if (cmd == 5) {
+                /* GetActiveChannelCount: the bootstrap audio device is a
+                 * conventional stereo output. Nintendo's nn::audio wrapper
+                 * consumes this as a plain u32 and aborts when the IPC command
+                 * itself fails, so return the real virtual-device topology
+                 * rather than treating it as an unsupported command. */
+                value = 2;
+                data_size = 4;
+                trace_printf("Scarlet audren device GetActiveChannelCount -> 2\n");
             } else goto unsupported;
         } else if (service == SERVICE_APM && cmd == 0) {
             moved = new_session(SERVICE_APM_SESSION);
