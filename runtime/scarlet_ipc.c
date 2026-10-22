@@ -35,7 +35,7 @@ enum { SERVICE_SM = 1, SERVICE_LM, SERVICE_LOGGER, SERVICE_APM, SERVICE_APM_SESS
        SERVICE_FSP, SERVICE_FSP_STORAGE, SERVICE_TIME, SERVICE_TIME_SYSTEM, SERVICE_TIME_STEADY, SERVICE_TIME_TZ,
        SERVICE_HID, SERVICE_HID_APPLET, SERVICE_HID_SYS,
        SERVICE_AUDREN, SERVICE_AUDREN_RENDERER, SERVICE_AUDREN_DEVICE,
-       SERVICE_SET };
+       SERVICE_SET, SERVICE_HWOPUS, SERVICE_HWOPUS_DECODER };
 static uint32_t performance_config[2] = {0x92220008, 0x92220008};
 static const unsigned char scarlet_clock_uuid[16] =
     {0x4c,0x41,0x52,0x65,0x63,0x6f,0x6d,0x70,1,2,3,4,5,6,7,8};
@@ -341,6 +341,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             else if (!strcmp(name, "hid")) moved = new_session(SERVICE_HID);
             else if (!strcmp(name, "hid:sys")) moved = new_session(SERVICE_HID_SYS);
             else if (!strcmp(name, "audren:u")) moved = new_session(SERVICE_AUDREN);
+            else if (!strcmp(name, "hwopus")) moved = new_session(SERVICE_HWOPUS);
             else if (!strcmp(name, "set")) moved = new_session(SERVICE_SET);
             else if (!strcmp(name, "pctl") || !strcmp(name, "pctl:a") ||
                      !strcmp(name, "pctl:r") || !strcmp(name, "pctl:s"))
@@ -635,6 +636,45 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             } else {
                 goto unsupported;
             }
+        } else if (service == SERVICE_HWOPUS) {
+            /* nn::codec::detail::IHardwareOpusDecoderManager.
+             *
+             * Scarlet only needs the service contract during bootstrap. The
+             * transfer-memory work area is opaque to the guest after it is
+             * handed to hwopus, so reserve a conservative page-aligned host
+             * compatibility size. 64 KiB comfortably covers a normal mono/
+             * stereo Opus decoder state; multistream gets 128 KiB. The actual
+             * decode path remains a separate decoder object and is not faked
+             * here until the game calls it. */
+            if (cmd == 1) { /* GetWorkBufferSize(sampleRate, channelCount) */
+                uint32_t rate = input_size >= 4 ? data[0] : 48000;
+                uint32_t channels = input_size >= 8 ? data[1] : 2;
+                value = 0x10000;
+                data_size = 4;
+                trace_printf("Scarlet hwopus GetWorkBufferSize rate=%u channels=%u -> %llx\n",
+                             rate, channels, (unsigned long long)value);
+                printf("Scarlet hwopus GetWorkBufferSize rate=%u channels=%u -> %llx\n",
+                       rate, channels, (unsigned long long)value);
+            } else if (cmd == 0) { /* OpenHardwareOpusDecoder */
+                moved = new_session(SERVICE_HWOPUS_DECODER);
+                if (!moved) result = 0xd201;
+                trace_printf("Scarlet hwopus OpenHardwareOpusDecoder -> %x\n", moved);
+            } else if (cmd == 3) { /* GetWorkBufferSizeForMultiStream */
+                value = 0x20000;
+                data_size = 4;
+                trace_printf("Scarlet hwopus GetWorkBufferSizeForMultiStream -> %llx\n",
+                             (unsigned long long)value);
+            } else if (cmd == 2) { /* OpenHardwareOpusDecoderForMultiStream */
+                moved = new_session(SERVICE_HWOPUS_DECODER);
+                if (!moved) result = 0xd201;
+                trace_printf("Scarlet hwopus OpenHardwareOpusDecoderForMultiStream -> %x\n", moved);
+            } else goto unsupported;
+        } else if (service == SERVICE_HWOPUS_DECODER) {
+            /* Keep decoder commands explicit. Once Scarlet actually submits
+             * compressed packets, the next log will identify the exact decode
+             * variant and buffers so it can be wired to libopus correctly
+             * rather than silently returning fabricated PCM. */
+            goto unsupported;
         } else if (service == SERVICE_AUDREN) {
             /* IAudioRendererManager. Command layout follows Horizon/libnx:
              * 0 OpenAudioRenderer, 1 GetWorkBufferSize, 2/4 audio-device service. */
