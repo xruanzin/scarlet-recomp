@@ -510,6 +510,7 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
             trace_printf("Scarlet ILogger destination=%x (host trace)\n", data[0]);
         } else goto unsupported;
     } else goto unsupported;
+respond:
     remember_ipc(service, cmd, type, result);
     const size_t data_words = (data_size + 3) / 4;
     const int has_handles = moved || copied;
@@ -587,10 +588,19 @@ static uint32_t request(Ctx *c, uint32_t h, uint32_t *msg, size_t size) {
     if (domain_out) out[4 + data_words] = domain_out;
     return 0;
 unsupported:
-    printf("Scarlet IPC unsupported: handle=%x service=%u type=%u cmd=%u guest=%llx\n",
+    printf("Scarlet IPC unsupported: handle=%x service=%u type=%u cmd=%u guest=%llx -> Result 0xf601\n",
            h, service, type, cmd, (unsigned long long)c->fn);
-    guest_trap("Scarlet IPC command", cmd);
-    return 0xf601;
+    /* An unknown service command is not a host-runtime failure. Send a normal
+     * HIPC/CMIF response carrying a service Result and let Nintendo's SDK/game
+     * decide whether the operation is optional, recoverable, or fatal. The old
+     * unconditional guest_trap made every missing IPC method an artificial hard
+     * boot stop. Keep that behaviour available when debugging a new service. */
+    if (getenv("SCARLET_IPC_STRICT") && atoi(getenv("SCARLET_IPC_STRICT")))
+        guest_trap("Scarlet IPC command", cmd);
+    result = 0xf601;
+    moved = copied = 0;
+    data_size = 0;
+    goto respond;
 }
 
 static int ipc_svc(Ctx *c, uint32_t n) {
