@@ -392,7 +392,13 @@ static DWORD WINAPI guest_main(LPVOID arg) {
     { extern void scarlet_set_tpidrro(Ctx *, uint64_t);
       scarlet_set_tpidrro(&c, (uint64_t)tlr); }
     memcpy(tlr + 0x1f0, &c.tpidr, 8);
-    { uint64_t os_main_thread_type(void); memcpy(tlr + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }
+    /* Do not seed TLR+0x1f8 here. In the static-recomp path the original
+     * Nintendo SDK ThreadManager is still present and owns publication of the
+     * current ThreadType in that slot. Pointing it at os_threads.c's zeroed
+     * HLE-only main-thread object makes the original ThreadManager observe an
+     * object it never initialized and abort while creating its first worker.
+     * The older scarlet_pc kernel likewise leaves +0x1f8 clear at kernel
+     * thread creation and lets the SDK publish it. */
 #else
     { uint64_t os_main_thread_type(void); memcpy(tls + 0x1f8, &(uint64_t){os_main_thread_type()}, 8); }
 #endif
