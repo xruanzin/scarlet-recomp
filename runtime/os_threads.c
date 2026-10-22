@@ -1084,7 +1084,23 @@ void scarlet_os_thread_hle(Ctx *c, int op) {
     case 9: os_GetThreadPriority(c); break;
     case 10: os_ChangeThreadPriority(c); break;
     case 11: os_GetThreadId(c); break;
-    default: guest_trap("Scarlet nn::os thread HLE op", (uint64_t)op); break;
+
+    /* Static SDK synchronization must share the same host-side object table as
+     * HLE-created threads. Leaving these in the original Horizon SDK mixes its
+     * futex/owner bookkeeping with our Win32-backed ThreadType lifecycle and
+     * can abort before the kernel wait SVC is reached. */
+    case 20: mtx_init(c); break;              /* InitializeMutex */
+    case 21: break;                           /* FinalizeMutex */
+    case 22: mtx_lock(c); break;              /* LockMutex / SdkMutexType::Lock */
+    case 23: mtx_unlock(c); break;            /* UnlockMutex / SdkMutexType::Unlock */
+    case 24: mtx_trylock(c); break;           /* TryLockMutex / SdkMutexType::TryLock */
+    case 25: mtx_init(c); break;              /* InitializeConditionVariable */
+    case 26: break;                           /* FinalizeConditionVariable */
+    case 27: cv_wait(c); break;               /* WaitConditionVariable */
+    case 28: cv_timedwait(c); break;          /* TimedWaitConditionVariable */
+    case 29: cv_signal(c); break;             /* SignalConditionVariable */
+    case 30: cv_broadcast(c); break;          /* BroadcastConditionVariable */
+    default: guest_trap("Scarlet nn::os thread/sync HLE op", (uint64_t)op); break;
     }
 }
 
