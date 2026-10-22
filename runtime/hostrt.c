@@ -553,6 +553,11 @@ static void dump_guest_registers(void) {
     Ctx *c = t_cur_ctx;
     if (!c) return;
     printf("last guest function entered: f_%llx\n", (unsigned long long)c->fn);
+#ifdef SCARLET_RECOMP
+    if (c->fn >= 0x7000000000ULL && c->fn < 0x7010000000ULL)
+        printf("guest instruction: pc=%llx word=%08x\n",
+               (unsigned long long)c->fn, (unsigned)rd32(c->fn));
+#endif
     printf("guest registers:\n");
     for (int i = 0; i < 31; i++)
         printf("  x%-2d %016llx%s", i, (unsigned long long)c->x[i], i % 3 == 2 ? "\n" : "");
@@ -1457,7 +1462,13 @@ static void crash_file_report(EXCEPTION_POINTERS *ep) {
     }
     Ctx *c = t_cur_ctx;
     if (c) {
-        fprintf(f, "last guest function entered: f_%llx\nguest registers:\n", (unsigned long long)c->fn);
+        fprintf(f, "last guest function entered: f_%llx\n", (unsigned long long)c->fn);
+#ifdef SCARLET_RECOMP
+        if (c->fn >= 0x7000000000ULL && c->fn < 0x7010000000ULL)
+            fprintf(f, "guest instruction: pc=%llx word=%08x\n",
+                    (unsigned long long)c->fn, (unsigned)rd32(c->fn));
+#endif
+        fprintf(f, "guest registers:\n");
         for (int i = 0; i < 31; i++) fprintf(f, "  x%-2d %016llx%s", i, (unsigned long long)c->x[i], i % 3 == 2 ? "\n" : "");
         fprintf(f, "  sp  %016llx\n", (unsigned long long)c->x[31]);
     }
