@@ -1505,9 +1505,31 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
         printf("\nHOST EXCEPTION 0x%08lx at host address %p (%s + 0x%llx)\n", er->ExceptionCode, er->ExceptionAddress, base_name(mname),
                mod ? (unsigned long long)((uintptr_t)er->ExceptionAddress - (uintptr_t)mod) : 0ull);
     }
-    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        uint64_t bad = (uint64_t)er->ExceptionInformation[1];
         printf("  %s address 0x%llx\n", er->ExceptionInformation[0] == 1 ? "writing" : "reading",
-               (unsigned long long)er->ExceptionInformation[1]);
+               (unsigned long long)bad);
+#ifdef SCARLET_RECOMP
+        /* A low fault address can be a module-relative pointer that escaped
+         * rebasing. Print every static-module candidate and its nearest dynsym;
+         * diagnostic only -- do not silently rewrite guest pointers here. */
+        if (bad && bad < 0x10000000ULL) {
+            for (int mi = 0; mi < SCARLET_STATIC_MODULE_COUNT; mi++) {
+                const ScarletStaticModule *m = &g_scarlet_static_modules[mi];
+                if (bad >= m->size) continue;
+                uint64_t cand = m->base + bad, sa = 0;
+                const char *sn = scarlet_symbolize_static_address(cand, &sa);
+                if (sn)
+                    printf("  low-address candidate: %s+0x%llx = 0x%llx -> %s+0x%llx\n",
+                           m->name, (unsigned long long)bad, (unsigned long long)cand,
+                           sn, (unsigned long long)(cand - sa));
+                else
+                    printf("  low-address candidate: %s+0x%llx = 0x%llx (no nearby dynsym)\n",
+                           m->name, (unsigned long long)bad, (unsigned long long)cand);
+            }
+        }
+#endif
+    }
     if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->ExceptionInformation[1] >= HOSTFN_BASE && er->ExceptionInformation[1] < HOSTFN_BASE + (uint64_t)g_hostfn_count * 16)
         printf("  (the placeholder address of the run-time host function %d, %s, +%llu, used as data)\n", (int)((er->ExceptionInformation[1] - HOSTFN_BASE) / 16),
                g_hostfn[(er->ExceptionInformation[1] - HOSTFN_BASE) / 16].name, (unsigned long long)((er->ExceptionInformation[1] - HOSTFN_BASE) % 16));
