@@ -226,6 +226,8 @@ uint64_t os_main_thread_type(void) {
         void *p = scarlet_guest_alloc(0x400);
         if (!p) guest_trap("Scarlet main ThreadType guest allocation failed", 0x400);
         g_main_thread_key = (uint64_t)(uintptr_t)p;
+        printf("Scarlet main ThreadType guest=%llx\n",
+               (unsigned long long)g_main_thread_key);
         trace_printf("Scarlet main ThreadType guest=%llx\n",
                      (unsigned long long)g_main_thread_key);
     }
