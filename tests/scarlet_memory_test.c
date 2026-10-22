@@ -3,6 +3,9 @@
 #include "../runtime/scarlet_memory.c"
 void trace_printf(const char *fmt, ...) { (void)fmt; }
 int main(void) {
+    /* Match boot.c: reserve the guest stack arena before exercising MapMemory. */
+    unsigned char *boot = scarlet_bootstrap_stack_reserve(0x120000);
+    assert(boot);
     /* Guest-free pages inside a larger host reservation can hold shared memory. */
     void *arena = VirtualAlloc((void *)(uintptr_t)0x7060000000ULL, 0x20000, MEM_RESERVE, PAGE_NOACCESS);
     assert(arena);
@@ -84,12 +87,35 @@ int main(void) {
     uint32_t d2 = (uint32_t)(((address >> 32) & 15) << 28) | (uint32_t)(((address >> 36) & 7) << 2);
     assert((d1 | ((uint64_t)(d2 >> 28) << 32) | ((uint64_t)((d2 >> 2) & 7) << 36)) == address);
     VirtualFree(tls, 0, MEM_RELEASE);
-    unsigned char *boot = scarlet_bootstrap_stack_reserve(0x120000);
     assert(boot && (uintptr_t)boot >= STACK_BASE && (uintptr_t)boot + 0x120000 <= STACK_BASE + STACK_SIZE);
     assert(VirtualAlloc(boot + 0x10000, 0x100000, MEM_COMMIT, PAGE_READWRITE) == boot + 0x10000);
     VirtualQuery(boot, &info, sizeof info); assert(info.State == MEM_RESERVE);
     VirtualQuery(boot + 0x110000, &info, sizeof info); assert(info.State == MEM_RESERVE);
     assert(scarlet_query_free_region(STACK_BASE + 0x100000, mi) && mi[0] + mi[1] <= (uintptr_t)boot);
+    /* Regression: source straddles two independent Windows reservations, as
+     * 0x727bfff000 + 0x20000 did immediately before ThreadManager aborted. */
+    uint64_t split = 0x7062000000ULL, alias = STACK_BASE + 0x200000;
+    assert(VirtualAlloc((void *)(uintptr_t)split, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    assert(map_memory(alias, split + 0xf000, 0x2000, 0) == 0xdc01);
+    /* A later protection failure must unwind the already-protected first page. */
+    assert(!stack_protect_range(split + 0xf000, 0x2000, PAGE_NOACCESS, PAGE_READWRITE));
+    VirtualQuery((void *)(uintptr_t)(split + 0xf000), &info, sizeof info);
+    assert(info.Protect == PAGE_READWRITE);
+    assert(VirtualAlloc((void *)(uintptr_t)(split + 0x10000), 0x20000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    uint64_t spanning = split + 0xf000;
+    memset((void *)(uintptr_t)spanning, 0x6b, 0x20000);
+    assert(map_memory(alias, spanning, 0x20000, 0) == 0);
+    VirtualQuery((void *)(uintptr_t)spanning, &info, sizeof info); assert(info.Protect == PAGE_NOACCESS);
+    VirtualQuery((void *)(uintptr_t)(split + 0x10000), &info, sizeof info); assert(info.Protect == PAGE_NOACCESS);
+    assert(*(unsigned char *)(uintptr_t)(alias + 0x1ffff) == 0x6b);
+    memset((void *)(uintptr_t)alias, 0x7c, 0x20000);
+    assert(map_memory(alias, spanning, 0x20000, 1) == 0);
+    assert(*(unsigned char *)(uintptr_t)spanning == 0x7c);
+    assert(*(unsigned char *)(uintptr_t)(spanning + 0x1ffff) == 0x7c);
+    VirtualQuery((void *)(uintptr_t)spanning, &info, sizeof info); assert(info.Protect == PAGE_READWRITE);
+    VirtualQuery((void *)(uintptr_t)(split + 0x10000), &info, sizeof info); assert(info.Protect == PAGE_READWRITE);
+    VirtualFree((void *)(uintptr_t)split, 0, MEM_RELEASE);
+    VirtualFree((void *)(uintptr_t)(split + 0x10000), 0, MEM_RELEASE);
     puts("Scarlet memory: 4KiB map, shared reservation, protection, copyback, query and validation passed");
     return 0;
 }

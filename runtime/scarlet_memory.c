@@ -288,6 +288,43 @@ static int shared_close(uint32_t h) {
     return 1;
 }
 
+/* A Horizon stack can cross adjacent Windows heap reservations. Validate the
+ * complete source, then protect each allocation-granularity chunk separately:
+ * VirtualProtect cannot span two MEM_RESERVE allocations even when both are RW. */
+static int stack_source_protection(uint64_t addr, uint64_t size, DWORD *protection) {
+    uint64_t end = addr + size;
+    int first = 1;
+    while (addr < end) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
+            !(mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (mi.Protect & PAGE_GUARD)) return 0;
+        if (first) { *protection = mi.Protect; first = 0; }
+        else if (mi.Protect != *protection) return 0;
+        uint64_t next = (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr) return 0;
+        addr = next < end ? next : end;
+    }
+    return 1;
+}
+static int stack_protect_range(uint64_t addr, uint64_t size, DWORD protection, DWORD rollback) {
+    uint64_t done = 0;
+    DWORD old;
+    while (done < size) {
+        uint64_t chunk = 0x10000 - ((addr + done) & 0xffff);
+        if (chunk > size - done) chunk = size - done;
+        if (!VirtualProtect((void *)(uintptr_t)(addr + done), (SIZE_T)chunk, protection, &old)) break;
+        done += chunk;
+    }
+    if (done == size) return 1;
+    for (uint64_t at = 0; at < done;) {
+        uint64_t chunk = 0x10000 - ((addr + at) & 0xffff);
+        if (chunk > done - at) chunk = done - at;
+        VirtualProtect((void *)(uintptr_t)(addr + at), (SIZE_T)chunk, rollback, &old);
+        at += chunk;
+    }
+    return 0;
+}
+
 static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap) {
     if ((dst | src) & 0xfff) return 0xcc01;
     if (!size || (size & 0xfff)) return 0xca01;
@@ -299,10 +336,12 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
             slot = &stack_maps[i]; break;
         }
         if (!slot) return 0xdc01;
-        DWORD old;
-        if (!VirtualProtect((void *)(uintptr_t)src, (SIZE_T)size, PAGE_READWRITE, &old)) return 0xd001;
+        if (!stack_protect_range(src, size, PAGE_READWRITE, PAGE_NOACCESS)) return 0xd001;
         memcpy((void *)(uintptr_t)src, (void *)(uintptr_t)dst, (size_t)size);
-        VirtualProtect((void *)(uintptr_t)src, (SIZE_T)size, slot->protection, &old);
+        if (!stack_protect_range(src, size, slot->protection, PAGE_READWRITE)) {
+            stack_protect_range(src, size, PAGE_NOACCESS, PAGE_READWRITE);
+            return 0xd001;
+        }
         VirtualFree((void *)(uintptr_t)dst, (SIZE_T)size, MEM_DECOMMIT);
         memset(slot, 0, sizeof *slot);
         return 0;
@@ -313,10 +352,8 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
         if ((dst < m->dst + m->size && m->dst < dst + size) || (src < m->src + m->size && m->src < src + size)) return 0xdc01;
     }
     if (!slot) return 0xd201;
-    MEMORY_BASIC_INFORMATION info;
-    if (!VirtualQuery((void *)(uintptr_t)src, &info, sizeof info) || info.State != MEM_COMMIT ||
-        !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (info.Protect & PAGE_GUARD) ||
-        src + size > (uint64_t)(uintptr_t)info.BaseAddress + info.RegionSize) return 0xdc01;
+    DWORD source_protection;
+    if (!stack_source_protection(src, size, &source_protection)) return 0xdc01;
     void *mapped = NULL;
     if (stack_full_reservation) {
         mapped = VirtualAlloc((void *)(uintptr_t)dst, (SIZE_T)size, MEM_COMMIT, PAGE_READWRITE);
@@ -337,11 +374,10 @@ static uint32_t map_memory(uint64_t dst, uint64_t src, uint64_t size, int unmap)
         return 0xd001;
     }
     memcpy(mapped, (void *)(uintptr_t)src, (size_t)size);
-    DWORD old;
-    if (!VirtualProtect((void *)(uintptr_t)src, (SIZE_T)size, PAGE_NOACCESS, &old)) {
+    if (!stack_protect_range(src, size, PAGE_NOACCESS, source_protection)) {
         VirtualFree(mapped, (SIZE_T)size, MEM_DECOMMIT); return 0xd001;
     }
-    *slot = (StackMap){dst, src, size, old};
+    *slot = (StackMap){dst, src, size, source_protection};
     return 0;
 }
 
