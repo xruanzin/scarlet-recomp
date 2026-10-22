@@ -10,6 +10,9 @@
 #include <windows.h>
 #include "runtime.h"
 #include "hostrt.h"
+#ifdef SCARLET_RECOMP
+#include "scarlet_tls.h"
+#endif
 /* L1 round 3, TEST ONLY: guest sync calls during the SSBU_L1_TRACE window (display.c) */
 #ifdef _WIN32
 int display_l1_trace(void); double display_l1_ms(void); const char *guest_thread_name_of(unsigned long tid);
@@ -376,7 +379,13 @@ static void os_SetThreadName(Ctx *c) {               /* the guest string may be 
     char *copy = _strdup((const char *)(uintptr_t)A1);
     obj(A0)->name = (uint64_t)(uintptr_t)copy;
 }
-static void os_GetCurrentThread(Ctx *c) { RET(t_thread ? t_thread : (uint64_t)g_main_thread); }
+static void os_GetCurrentThread(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    RET(scarlet_sdk_current_thread(c));
+#else
+    RET(t_thread ? t_thread : (uint64_t)g_main_thread);
+#endif
+}
 static Obj *thread_obj(uint64_t key);
 static void os_GetThreadPriority(Ctx *c) { RET((int64_t)thread_obj(A0 == (uint64_t)(uintptr_t)g_main_thread ? 0 : A0)->priority); }
 static void os_ChangeThreadPriority(Ctx *c) {
@@ -466,8 +475,20 @@ static void tls_run_destructors(Ctx *c) {
         if (v && fn && g_tls_used[i]) { c->x[0] = v; call_guest(c, fn); }
     }
 }
-static void os_GetTlsValue(Ctx *c) { RET(t_tls[A0 & 63]); }
-static void os_SetTlsValue(Ctx *c) { t_tls[A0 & 63] = A1; }
+static void os_GetTlsValue(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    RET(scarlet_sdk_tls_value(c, (uint32_t)A0));
+#else
+    RET(t_tls[A0 & 63]);
+#endif
+}
+static void os_SetTlsValue(Ctx *c) {
+#ifdef SCARLET_RECOMP
+    scarlet_sdk_set_tls_value(c, (uint32_t)A0, A1);
+#else
+    t_tls[A0 & 63] = A1;
+#endif
+}
 
 /* ---------------------------------------------------------------- mutexes */
 static void mtx_init(Ctx *c) { (void)obj(A0); }
