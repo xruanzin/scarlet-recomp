@@ -38,6 +38,8 @@ LATE_INDIRECT_STARTS = {
         0x7000a7d83c, 0x7000a7d848, 0x7000a7d958,
         0x7000a7d988, 0x7000a7da98, 0x7000a7daec,
         0x7000a7db24, 0x7000a7db34, 0x7000a7dbbc,
+        # Boot-discovered indirect call from f_7000e53ff8 (game_20261022_010743.log).
+        0x7000e54188,
         0x7001507078,
         0x7001507080,
         0x70015070b0,
