@@ -79,7 +79,7 @@ static SRWLOCK shmem_lock = SRWLOCK_INIT;
  * any 4KiB-aligned shared-memory address. Several guest objects may occupy
  * different pages of one Windows reservation. Track page ownership so closing
  * one mapping cannot release an adjacent object's reservation. */
-typedef struct { uint64_t base; uint32_t pages; } SharedReservation;
+typedef struct { uint64_t base; uint32_t pages; int owned; } SharedReservation;
 static SharedReservation shared_reservations[256];
 static void shared_vm_unmap(uint64_t addr, uint64_t size) {
     while (size) {
@@ -92,8 +92,8 @@ static void shared_vm_unmap(uint64_t addr, uint64_t size) {
             VirtualFree((void *)(uintptr_t)addr, (SIZE_T)chunk, MEM_DECOMMIT);
             shared_reservations[i].pages &= ~mask;
             if (!shared_reservations[i].pages) {
-                VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE);
-                shared_reservations[i].base = 0;
+                if (shared_reservations[i].owned) VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE);
+                memset(&shared_reservations[i], 0, sizeof shared_reservations[i]);
             }
             break;
         }
@@ -116,7 +116,14 @@ static int shared_vm_map(uint64_t addr, uint64_t size) {
         int reserved = 0;
         if (!slot && empty) {
             void *p = VirtualAlloc((void *)(uintptr_t)base, 0x10000, MEM_RESERVE, PAGE_NOACCESS);
-            if (p == (void *)(uintptr_t)base) { slot = empty; slot->base = base; reserved = 1; }
+            if (p == (void *)(uintptr_t)base) { slot = empty; slot->base = base; slot->owned = 1; reserved = 1; }
+            else {
+                MEMORY_BASIC_INFORMATION mi;
+                if (VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi) && mi.State == MEM_RESERVE &&
+                    (uint64_t)(uintptr_t)mi.BaseAddress + mi.RegionSize >= addr + chunk) {
+                    slot = empty; slot->base = base; slot->owned = 0;
+                }
+            }
         }
         if (!slot || (slot->pages & mask) ||
             !VirtualAlloc((void *)(uintptr_t)addr, (SIZE_T)chunk, MEM_COMMIT, PAGE_READWRITE)) {

@@ -3,6 +3,17 @@
 #include "../runtime/scarlet_memory.c"
 void trace_printf(const char *fmt, ...) { (void)fmt; }
 int main(void) {
+    /* Guest-free pages inside a larger host reservation can hold shared memory. */
+    void *arena = VirtualAlloc(NULL, 0x20000, MEM_RESERVE, PAGE_NOACCESS);
+    assert(arena);
+    uint64_t shared_at = (uintptr_t)arena + 0x3000;
+    assert(shared_vm_map(shared_at, 0x1000));
+    *(volatile unsigned char *)(uintptr_t)shared_at = 42;
+    shared_vm_unmap(shared_at, 0x1000);
+    MEMORY_BASIC_INFORMATION reserved_info;
+    VirtualQuery(arena, &reserved_info, sizeof reserved_info);
+    assert(reserved_info.State == MEM_RESERVE);
+    assert(VirtualFree(arena, 0, MEM_RELEASE));
     unsigned char *src = VirtualAlloc(NULL, 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     assert(src); memset(src, 0x5a, 0x10000);
     uint64_t from = (uintptr_t)src, dst = STACK_BASE + 0x5000;
