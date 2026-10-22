@@ -32,3 +32,7 @@ REA inspected the generated native PE earlier in this investigation. Ghidra was 
 `build/logs/boot-final.log`: process exited 0 after the configured 60-second limit (65 seconds including shutdown), 15 guest kernel threads started, 11,872 program/shader registrations, 56 containers / 3,822 variations scanned, 3,480 Vulkan shader modules created. No guest trap, host exception or Vulkan call failure in this run. Zero presented frames: the title screen is not validated. The main thread was waiting on a Horizon condition variable while workers prepared assets/shaders.
 
 A following `setup.py --dump <Base> --from compile` completed in 9.5 seconds: 0 of 1,221 sources compiled; structural checks passed. This confirms that repeating the supplied incremental command preserves the existing game objects.
+
+## Longer warm-cache run: remaining blockers
+
+`build/logs/boot-warm.log` (requested 180-second limit) failed before the limit with native access violation 0xc0000005 in ntdll, reading 0xffffffffffffffff; no guest stack was reported. The root cause of this native failure has not been isolated. Before it, the renderer reported untranslated Maxwell SHFL and SURED, SUST with a register image handle, and GLSL rejection because texel offsets were not compile-time constants. No presented frame. Thus the passing 60-second smoke test does not establish a stable full boot or playable game. Further work must investigate the renderer/shader translator and the native failure, in addition to any subsequently reached Horizon services.
