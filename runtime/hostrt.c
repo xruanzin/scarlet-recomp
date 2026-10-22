@@ -1466,7 +1466,15 @@ static void crash_file_report(EXCEPTION_POINTERS *ep) {
     uint64_t last = 0;
     for (int depth = 0, shown = 0; depth < 400 && shown < 40; depth++) {
         uint64_t g = guest_function_of(ctx.Rip);
-        if (g && g != last) { fprintf(f, "  f_%llx\n", (unsigned long long)g); shown++; last = g; }
+        if (g && g != last) {
+            uint64_t sa = 0;
+            const char *sn = scarlet_symbolize_static_address(g, &sa);
+            if (sn) fprintf(f, "  f_%llx  %s+0x%llx\n",
+                            (unsigned long long)g, sn,
+                            (unsigned long long)(g - sa));
+            else fprintf(f, "  f_%llx\n", (unsigned long long)g);
+            shown++; last = g;
+        }
         DWORD64 image_base;
         RUNTIME_FUNCTION *rf = RtlLookupFunctionEntry(ctx.Rip, &image_base, NULL);
         if (!rf) break;
@@ -1509,7 +1517,15 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     uint64_t last = 0;
     for (int depth = 0, shown = 0; depth < 400 && shown < 40; depth++) {
         uint64_t g = guest_function_of(ctx.Rip);
-        if (g && g != last) { printf("  f_%llx\n", (unsigned long long)g); shown++; last = g; }
+        if (g && g != last) {
+            uint64_t sa = 0;
+            const char *sn = scarlet_symbolize_static_address(g, &sa);
+            if (sn) printf("  f_%llx  %s+0x%llx\n",
+                           (unsigned long long)g, sn,
+                           (unsigned long long)(g - sa));
+            else printf("  f_%llx\n", (unsigned long long)g);
+            shown++; last = g;
+        }
         DWORD64 image_base;
         RUNTIME_FUNCTION *rf = RtlLookupFunctionEntry(ctx.Rip, &image_base, NULL);
         if (!rf) break;
