@@ -63,8 +63,13 @@ static uint64_t align_up_u64(uint64_t v, uint64_t a) {
  * hard-coded 8 MiB value was proven too small: the guest wrote exactly at
  * work_buffer + 0x800000 during OpenAudioRenderer. */
 static uint64_t scarlet_audren_work_buffer_size(const uint32_t *p, size_t bytes) {
-    const uint64_t compat_floor = 16ull << 20;
-    if (!p || bytes < 0x34) return compat_floor;
+    /* The game's SDK allocates this buffer from its own heap immediately after
+     * querying audren:u. Returning an arbitrary multi-megabyte compatibility
+     * floor makes nn::audio walk beyond that allocation. 0x30000 is only a
+     * conservative fallback for malformed/short requests; normal requests use
+     * the parameter-derived Horizon formula below. */
+    const uint64_t short_request_fallback = 0x30000;
+    if (!p || bytes < 0x34) return short_request_fallback;
 
     uint64_t sample_count   = p[1];
     uint64_t mix_count      = p[2];
@@ -92,8 +97,9 @@ static uint64_t scarlet_audren_work_buffer_size(const uint32_t *p, size_t bytes)
     unsigned rev_num = 0;
     if ((revision & 0x00ffffffu) == 0x00564552u) {
         unsigned ch = (revision >> 24) & 0xffu;
-        if (ch >= '0' && ch <= '9') rev_num = ch - '0';
-        else if (ch >= 'A' && ch <= 'Z') rev_num = 10u + ch - 'A';
+        /* Nintendo keeps incrementing the final byte past '9': REV: is
+         * revision 10, REV; is 11, and so on. Scarlet 1.0.0 uses REV:. */
+        if (ch >= '0') rev_num = ch - '0';
     }
     if (rev_num >= 2) {
         uint64_t count = submix_count + 1;
@@ -120,7 +126,6 @@ static uint64_t scarlet_audren_work_buffer_size(const uint32_t *p, size_t bytes)
     }
     sz = align_up_u64(sz + 0x1807e, 0x1000);
 
-    if (sz < compat_floor) sz = compat_floor;
     return sz;
 }
 
