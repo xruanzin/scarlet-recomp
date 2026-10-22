@@ -23,6 +23,61 @@ typedef struct {
 static SharedMem shmem[SHMEM_LIMIT];
 static SRWLOCK shmem_lock = SRWLOCK_INIT;
 
+/* VirtualAlloc reservations require 64KiB alignment, while Horizon accepts
+ * any 4KiB-aligned shared-memory address. Several guest objects may occupy
+ * different pages of one Windows reservation. Track page ownership so closing
+ * one mapping cannot release an adjacent object's reservation. */
+typedef struct { uint64_t base; uint32_t pages; } SharedReservation;
+static SharedReservation shared_reservations[256];
+static void shared_vm_unmap(uint64_t addr, uint64_t size) {
+    while (size) {
+        uint64_t base = addr & ~0xffffULL;
+        uint64_t chunk = 0x10000 - (addr - base);
+        if (chunk > size) chunk = size;
+        unsigned first = (unsigned)((addr - base) >> 12), count = (unsigned)(chunk >> 12);
+        uint32_t mask = ((1u << count) - 1u) << first;
+        for (unsigned i = 0; i < 256; ++i) if (shared_reservations[i].base == base) {
+            VirtualFree((void *)(uintptr_t)addr, (SIZE_T)chunk, MEM_DECOMMIT);
+            shared_reservations[i].pages &= ~mask;
+            if (!shared_reservations[i].pages) {
+                VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE);
+                shared_reservations[i].base = 0;
+            }
+            break;
+        }
+        addr += chunk; size -= chunk;
+    }
+}
+static int shared_vm_map(uint64_t addr, uint64_t size) {
+    uint64_t begin = addr, mapped = 0;
+    while (size) {
+        uint64_t base = addr & ~0xffffULL;
+        uint64_t chunk = 0x10000 - (addr - base);
+        if (chunk > size) chunk = size;
+        unsigned first = (unsigned)((addr - base) >> 12), count = (unsigned)(chunk >> 12);
+        uint32_t mask = ((1u << count) - 1u) << first;
+        SharedReservation *slot = NULL, *empty = NULL;
+        for (unsigned i = 0; i < 256; ++i) {
+            if (shared_reservations[i].base == base) { slot = &shared_reservations[i]; break; }
+            if (!shared_reservations[i].base && !empty) empty = &shared_reservations[i];
+        }
+        int reserved = 0;
+        if (!slot && empty) {
+            void *p = VirtualAlloc((void *)(uintptr_t)base, 0x10000, MEM_RESERVE, PAGE_NOACCESS);
+            if (p == (void *)(uintptr_t)base) { slot = empty; slot->base = base; reserved = 1; }
+        }
+        if (!slot || (slot->pages & mask) ||
+            !VirtualAlloc((void *)(uintptr_t)addr, (SIZE_T)chunk, MEM_COMMIT, PAGE_READWRITE)) {
+            if (reserved) { VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE); slot->base = 0; }
+            shared_vm_unmap(begin, mapped);
+            return 0;
+        }
+        slot->pages |= mask;
+        addr += chunk; size -= chunk; mapped += chunk;
+    }
+    return 1;
+}
+
 uint32_t scarlet_sharedmem_create(uint64_t size, const void *initial, size_t initial_size) {
     if (!size || (size & 0xfff)) return 0;
     AcquireSRWLockExclusive(&shmem_lock);
@@ -48,21 +103,18 @@ static SharedMem *shared_lookup(uint32_t h) {
 }
 static uint32_t shared_map(uint32_t h, uint64_t addr, uint64_t size, int unmap) {
     SharedMem *m = shared_lookup(h);
-    if (!m || !addr || (addr & 0xfff) || !size || (size & 0xfff) || size > m->size) return 0xe401;
+    if (!m || !addr || (addr & 0xfff) || !size || (size & 0xfff) || size != m->size || addr + size < addr) return 0xe401;
     if (unmap) {
         if (m->mapped_addr != addr) return 0xdc01;
-        VirtualFree((void *)(uintptr_t)addr, 0, MEM_RELEASE);
+        memcpy(m->initial, (void *)(uintptr_t)addr, (size_t)size);
+        shared_vm_unmap(addr, size);
         m->mapped_addr = 0;
         return 0;
     }
     if (m->mapped_addr && m->mapped_addr != addr) return 0xdc01;
     if (!m->mapped_addr) {
-        void *p = VirtualAlloc((void *)(uintptr_t)addr, (SIZE_T)size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if (p != (void *)(uintptr_t)addr) {
-            if (p) VirtualFree(p, 0, MEM_RELEASE);
-            return 0xd001;
-        }
-        memcpy(p, m->initial, (size_t)size);
+        if (!shared_vm_map(addr, size)) return 0xd001;
+        memcpy((void *)(uintptr_t)addr, m->initial, (size_t)size);
         m->mapped_addr = addr;
     }
     return 0;
@@ -70,7 +122,7 @@ static uint32_t shared_map(uint32_t h, uint64_t addr, uint64_t size, int unmap) 
 static int shared_close(uint32_t h) {
     SharedMem *m = shared_lookup(h);
     if (!m) return 0;
-    if (m->mapped_addr) VirtualFree((void *)(uintptr_t)m->mapped_addr, 0, MEM_RELEASE);
+    if (m->mapped_addr) shared_vm_unmap(m->mapped_addr, m->size);
     free(m->initial);
     memset(m, 0, sizeof *m);
     return 1;
