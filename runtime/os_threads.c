@@ -218,8 +218,23 @@ static __attribute__((noinline)) void *thread_fiber(void) {
     if (!t_thread_fiber) t_thread_fiber = ConvertThreadToFiber(NULL);
     return t_thread_fiber;
 }
+#ifdef SCARLET_RECOMP
+static uint64_t g_main_thread_key;
+uint64_t os_main_thread_type(void) {
+    if (!g_main_thread_key) {
+        extern void *scarlet_guest_alloc(size_t);
+        void *p = scarlet_guest_alloc(0x400);
+        if (!p) guest_trap("Scarlet main ThreadType guest allocation failed", 0x400);
+        g_main_thread_key = (uint64_t)(uintptr_t)p;
+        trace_printf("Scarlet main ThreadType guest=%llx\n",
+                     (unsigned long long)g_main_thread_key);
+    }
+    return g_main_thread_key;
+}
+#else
 static uint8_t g_main_thread[0x400];
-uint64_t os_main_thread_type(void) { return (uint64_t)(uintptr_t)g_main_thread; }   /* boot.c: stored at thread block +0x1f8, as [sdk 0x3349dc] does */
+uint64_t os_main_thread_type(void) { return os_main_thread_type(); }
+#endif
 uint64_t g_main_stack_base, g_main_stack_size;        /* set by boot.c */
 static volatile LONG g_thread_count;
 
@@ -402,18 +417,18 @@ static void os_GetCurrentThread(Ctx *c) {
 #ifdef SCARLET_RECOMP
     RET(scarlet_sdk_current_thread(c));
 #else
-    RET(t_thread ? t_thread : (uint64_t)g_main_thread);
+    RET(t_thread ? t_thread : os_main_thread_type());
 #endif
 }
 static Obj *thread_obj(uint64_t key);
-static void os_GetThreadPriority(Ctx *c) { RET((int64_t)thread_obj(A0 == (uint64_t)(uintptr_t)g_main_thread ? 0 : A0)->priority); }
+static void os_GetThreadPriority(Ctx *c) { RET((int64_t)thread_obj(A0 == os_main_thread_type() ? 0 : A0)->priority); }
 static void os_ChangeThreadPriority(Ctx *c) {
     Obj *o = obj(A0);
     int old = o->priority;
-    oslog("  change priority of %s: %d -> %d (called from %llx)\n", A0 == (uint64_t)(uintptr_t)g_main_thread ? "the main thread" : o->name ? (const char *)(uintptr_t)o->name : "?", old, (int)A1, (unsigned long long)c->x[30]);
+    oslog("  change priority of %s: %d -> %d (called from %llx)\n", A0 == os_main_thread_type() ? "the main thread" : o->name ? (const char *)(uintptr_t)o->name : "?", old, (int)A1, (unsigned long long)c->x[30]);
     o->priority = (int)A1;
     if (o->thread) SetThreadPriority(o->thread, host_priority(o->priority));
-    else if (A0 == (uint64_t)(uintptr_t)g_main_thread || A0 == t_thread) SetThreadPriority(GetCurrentThread(), host_priority(o->priority));
+    else if (A0 == os_main_thread_type() || A0 == t_thread) SetThreadPriority(GetCurrentThread(), host_priority(o->priority));
     RET((int64_t)old);
 }
 static void os_GetThreadId(Ctx *c) { Obj *o = obj(A0); RET(o->thread ? GetThreadId(o->thread) : GetCurrentThreadId()); }
@@ -441,7 +456,7 @@ static void os_GetCurrentStackInfo(Ctx *c) {
  * SetThreadCoreMask widens its mask. The values are kept per thread and returned as set; the Windows scheduler is
  * not told to pin anything (a PC has more than three cores and the game's threads would pile up on host CPU 0). */
 static Obj *thread_obj(uint64_t key) {
-    Obj *o = obj(key ? key : (uint64_t)(uintptr_t)g_main_thread);
+    Obj *o = obj(key ? key : os_main_thread_type());
     if (!o->core_set) { o->core_set = 1; o->ideal_core = OS_DEFAULT_CORE; o->core_mask = 1ull << OS_DEFAULT_CORE; if (!o->priority) o->priority = OS_DEFAULT_PRIORITY; }
     return o;
 }
@@ -449,9 +464,9 @@ static void os_SetThreadCoreMask(Ctx *c) {            /* (ThreadType*, int ideal
     Obj *o = thread_obj(A0);
     int ideal = (int)A1;
     uint64_t mask = A2;
-    oslog("  core mask of %s: ideal %d mask %llx (was ideal %d mask %llx; %s; called from %llx)\n", A0 == (uint64_t)(uintptr_t)g_main_thread || !A0 ? "the main thread" : o->name ? (const char *)(uintptr_t)o->name : "?",
+    oslog("  core mask of %s: ideal %d mask %llx (was ideal %d mask %llx; %s; called from %llx)\n", A0 == os_main_thread_type() || !A0 ? "the main thread" : o->name ? (const char *)(uintptr_t)o->name : "?",
           ideal, (unsigned long long)mask, o->ideal_core, (unsigned long long)o->core_mask, o->thread ? "running" : "not started", (unsigned long long)c->x[30]);
-    int is_self = t_thread ? A0 == t_thread : (!A0 || A0 == (uint64_t)(uintptr_t)g_main_thread);      /* the calling thread names itself */
+    int is_self = t_thread ? A0 == t_thread : (!A0 || A0 == os_main_thread_type());      /* the calling thread names itself */
     HANDLE h = o->thread ? o->thread : is_self ? GetCurrentThread() : NULL;                             /* NULL: not started yet (applied at StartThread) */
     if (ideal == -2) { o->ideal_core = OS_DEFAULT_CORE; o->core_mask = 1ull << OS_DEFAULT_CORE; apply_sched(h, o->core_mask); return; }   /* IdealCoreUseDefaultValue: mask is ignored */
     if (ideal == -3) { o->core_mask = mask; apply_sched(h, o->core_mask); return; }                           /* IdealCoreNoUpdate */
@@ -938,9 +953,24 @@ static void pt_create(Ctx *c) {
     if (!size) size = 1u << 20;
     if (size < (256u << 10)) size = 256u << 10;
     size = (size + 0xffff) & ~0xffffull;
-    uint8_t *tt = calloc(1, 0x400);                   /* the thread's ThreadType: never freed (pthread_t values stay unique) */
+#ifdef SCARLET_RECOMP
+    extern void *scarlet_guest_alloc(size_t);
+    uint8_t *tt = (uint8_t *)scarlet_guest_alloc(0x400);
+#else
+    uint8_t *tt = calloc(1, 0x400);
+#endif
+    /* pthread_t is guest-visible and the SDK dereferences ThreadType fields.
+     * On Scarlet it therefore must live in the guest VA window, never in the
+     * host CRT heap where ASLR addresses can escape/truncate in lifted code. */
     void *stack = VirtualAlloc(NULL, (SIZE_T)size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!tt || !stack) { free(tt); if (stack) VirtualFree(stack, 0, MEM_RELEASE); RET(P_EAGAIN); return; }
+    if (!tt || !stack) {
+#ifndef SCARLET_RECOMP
+        free(tt);
+#endif
+        if (stack) VirtualFree(stack, 0, MEM_RELEASE);
+        RET(P_EAGAIN);
+        return;
+    }
     Obj *o = obj((uint64_t)(uintptr_t)tt);
     o->fn = A2; o->arg = A3; o->stack = (uint64_t)(uintptr_t)stack; o->stack_size = size;
     o->priority = OS_DEFAULT_PRIORITY; o->ideal_core = OS_DEFAULT_CORE; o->core_mask = 1ull << OS_DEFAULT_CORE; o->core_set = 1;
@@ -957,7 +987,7 @@ static void pt_create(Ctx *c) {
     ResumeThread(o->thread);
     RET(0);
 }
-static uint64_t pt_self_id(void) { return t_thread ? t_thread : (uint64_t)(uintptr_t)g_main_thread; }
+static uint64_t pt_self_id(void) { return t_thread ? t_thread : os_main_thread_type(); }
 static void pt_self(Ctx *c) { RET(pt_self_id()); }
 static void pt_equal(Ctx *c) { RET(A0 == A1); }
 /* pthread_join for nnlibc2.c too (the game's own pthread_join import): errno, or -1 when `t` is not a pthread_create thread */
