@@ -21,6 +21,7 @@ typedef struct {
     uint64_t (*guest_cntpct)(void);          /* Scarlet: ARM generic physical timer */
     uint64_t (*guest_tpidrro)(Ctx *);        /* Scarlet: TPIDRRO_EL0 / TLR, appended ABI field */
     void (*scarlet_stdalloc)(Ctx *, int);    /* Scarlet: host-backed nn::mem::StandardAllocator */
+    void (*scarlet_threads)(Ctx *, int);     /* Scarlet: host-backed nn::os thread lifecycle */
 } GameHost;
 
 typedef struct {
@@ -49,6 +50,10 @@ uint64_t guest_tpidrro(Ctx *c) { return host.guest_tpidrro ? host.guest_tpidrro(
 void scarlet_stdalloc_hle(Ctx *c, int op) {
     if (host.scarlet_stdalloc) host.scarlet_stdalloc(c, op);
     else guest_trap("Scarlet StandardAllocator HLE is not bound", (uint64_t)op);
+}
+void scarlet_os_thread_hle(Ctx *c, int op) {
+    if (host.scarlet_threads) host.scarlet_threads(c, op);
+    else guest_trap("Scarlet nn::os thread HLE is not bound", (uint64_t)op);
 }
 
 __declspec(dllexport) void game_bind(const GameHost *h, GameTables *t) {
