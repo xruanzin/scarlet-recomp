@@ -1045,6 +1045,30 @@ static void os_GenerateRandomBytes(Ctx *c) {
     }
 }
 
+/* Static Scarlet SDK thread entry points can be lifted into scarlet_game.dll
+ * instead of arriving through the import table. Keep one dispatcher here so
+ * recomp_eh.py can route those public nn::os functions to the exact same HLE
+ * object model used by imported thread APIs. Mixing the original SDK
+ * ThreadManager with HLE GetCurrentThread/TLS is nondeterministic during
+ * bootstrap and can abort before svcCreateThread is ever reached. */
+void scarlet_os_thread_hle(Ctx *c, int op) {
+    switch (op) {
+    case 0: os_CreateThread(c); break;
+    case 1: os_CreateThreadOnCore(c); break;
+    case 2: os_StartThread(c); break;
+    case 3: os_WaitThread(c); break;
+    case 4: os_DestroyThread(c); break;
+    case 5: os_SetThreadName(c); break;
+    case 6: os_SetThreadCoreMask(c); break;
+    case 7: os_GetThreadCoreMask(c); break;
+    case 8: os_GetCurrentThread(c); break;
+    case 9: os_GetThreadPriority(c); break;
+    case 10: os_ChangeThreadPriority(c); break;
+    case 11: os_GetThreadId(c); break;
+    default: guest_trap("Scarlet nn::os thread HLE op", (uint64_t)op); break;
+    }
+}
+
 #define OS(n) "_ZN2nn2os" n
 static const ImportDef thread_imports[] = {
     {OS("12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi"), os_CreateThread},
