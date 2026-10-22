@@ -36,3 +36,11 @@ A following `setup.py --dump <Base> --from compile` completed in 9.5 seconds: 0 
 ## Longer warm-cache run: remaining blockers
 
 `build/logs/boot-warm.log` (requested 180-second limit) failed before the limit with native access violation 0xc0000005 in ntdll, reading 0xffffffffffffffff; no guest stack was reported. The root cause of this native failure has not been isolated. Before it, the renderer reported untranslated Maxwell SHFL and SURED, SUST with a register image handle, and GLSL rejection because texel offsets were not compile-time constants. No presented frame. Thus the passing 60-second smoke test does not establish a stable full boot or playable game. Further work must investigate the renderer/shader translator and the native failure, in addition to any subsequently reached Horizon services.
+
+## User log follow-up: game_20261022_005508.log
+
+The supplied run stopped on unimplemented SVC 0x34 (WaitForAddress, type 2) and SVC 0x35 (SignalToAddress, type 2), both on the same address. Ported all three wait/signal variants from the legacy Scarlet kernel to Windows: predicate checking, decrement-if-less, equality/increment/conditional modification, atomic waiter registration, count-limited wakes and broadcast for nonpositive counts. A separate address queue avoids condition-variable key-flag writes corrupting the arbitration word.
+
+`scarlet_address_test` passes 300 signal/registration races, signed comparison, decrement, timeout cleanup, conditional word updates and bounded/broadcast wakes; the existing 500-round condition-variable stress test also passes. Runtime-only link preserves the 1,221 game objects.
+
+`boot-address-no-cscan.log` records SignalToAddress returning 0 and WaitForAddress returning the expected InvalidState (0xfa01) when the userspace value changed first. The original unimplemented-SVC traps are removed. This diagnostic run disabled speculative container scanning, but still hit the independent native ntdll access violation while shaders were being prepared (0 frames). Disabling the scan alone does not resolve the native failure; it is not committed as a workaround.

@@ -1083,6 +1083,18 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
     }
     case 0x1E: /* GetSystemTick */
         x[0] = guest_cntpct(); return 1;
+    case 0x34: { /* WaitForAddress(address, arbitration_type, value, timeout) */
+        uint64_t addr = x[0];
+        x[0] = scarlet_wait_for_address(addr, (uint32_t)x[1], (int32_t)x[2], (int64_t)x[3]);
+        trace_printf("Scarlet WaitForAddress addr=%llx type=%u -> %x\n", (unsigned long long)addr, (unsigned)x[1], (unsigned)x[0]);
+        return 1;
+    }
+    case 0x35: { /* SignalToAddress(address, signal_type, value, count) */
+        uint64_t addr = x[0];
+        x[0] = scarlet_signal_to_address(addr, (uint32_t)x[1], (int32_t)x[2], (int32_t)x[3]);
+        trace_printf("Scarlet SignalToAddress addr=%llx type=%u count=%d -> %x\n", (unsigned long long)addr, (unsigned)x[1], (int32_t)x[3], (unsigned)x[0]);
+        return 1;
+    }
     case 0x24: /* GetProcessId */
         x[0] = 0; x[1] = 0x81; return 1;
     case 0x25: { /* GetThreadId(_, handle) */

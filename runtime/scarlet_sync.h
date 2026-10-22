@@ -124,4 +124,80 @@ static void scarlet_signal_process_wide_key(uint64_t key, int32_t count) {
     ReleaseSRWLockExclusive(&scarlet_key_lock);
 }
 
+/* Horizon address arbitration, ported from scarlet_pc's kernel. The queue lock
+ * serializes predicate evaluation/registration with the signal's comparison and
+ * modification. Events retain signals delivered before the waiter sleeps. */
+typedef struct ScarletAddressWaiter {
+    uint64_t address;
+    HANDLE event;
+    int signaled;
+    struct ScarletAddressWaiter *next;
+} ScarletAddressWaiter;
+static SRWLOCK scarlet_address_lock = SRWLOCK_INIT;
+static ScarletAddressWaiter *scarlet_address_waiters;
+static uint32_t scarlet_wait_for_address(uint64_t addr, uint32_t type, int32_t value, int64_t timeout) {
+    if (type > 2) return 0xf001;
+    if (!addr || (addr & 3)) return 0xcc01;
+    ScarletAddressWaiter waiter = {addr, CreateEventW(NULL, FALSE, FALSE, NULL), 0, NULL};
+    if (!waiter.event) return 0xd201;
+    volatile LONG *word = (volatile LONG *)(uintptr_t)addr;
+    uint32_t result = 0;
+    AcquireSRWLockExclusive(&scarlet_address_lock);
+    for (;;) {
+        int32_t current = (int32_t)scarlet_mutex_load(addr);
+        if (!(type == 2 ? current == value : current < value)) { result = 0xfa01; break; }
+        if (type == 1 && InterlockedCompareExchange(word, (LONG)((uint32_t)current - 1u), current) != current) continue;
+        if (!timeout) { result = SCARLET_R_TIMEOUT; break; }
+        ScarletAddressWaiter **tail = &scarlet_address_waiters;
+        while (*tail) tail = &(*tail)->next;
+        *tail = &waiter;
+        break;
+    }
+    ReleaseSRWLockExclusive(&scarlet_address_lock);
+    if (!result) {
+        DWORD ms = INFINITE;
+        if (timeout >= 0) {
+            uint64_t m = ((uint64_t)timeout + 999999ULL) / 1000000ULL;
+            ms = m >= 0xfffffffeULL ? 0xfffffffeUL : (DWORD)m;
+        }
+        WaitForSingleObject(waiter.event, ms);
+        AcquireSRWLockExclusive(&scarlet_address_lock);
+        ScarletAddressWaiter **link = &scarlet_address_waiters;
+        while (*link && *link != &waiter) link = &(*link)->next;
+        if (*link) *link = waiter.next;
+        result = waiter.signaled ? 0 : SCARLET_R_TIMEOUT;
+        ReleaseSRWLockExclusive(&scarlet_address_lock);
+    }
+    CloseHandle(waiter.event);
+    return result;
+}
+static uint32_t scarlet_signal_to_address(uint64_t addr, uint32_t type, int32_t value, int32_t count) {
+    if (type > 2) return 0xf001;
+    if (!addr || (addr & 3)) return 0xcc01;
+    AcquireSRWLockExclusive(&scarlet_address_lock);
+    uint32_t waiting = 0;
+    for (ScarletAddressWaiter *p = scarlet_address_waiters; p; p = p->next)
+        if (p->address == addr) ++waiting;
+    if (type) {
+        uint32_t next = (uint32_t)value + 1u;
+        if (type == 2) {
+            if (count <= 0) next = waiting ? (uint32_t)value - 2u : next;
+            else if (waiting) next = waiting <= (uint32_t)count ? (uint32_t)value - 1u : (uint32_t)value;
+        }
+        if ((uint32_t)InterlockedCompareExchange((volatile LONG *)(uintptr_t)addr, (LONG)next, value) != (uint32_t)value) {
+            ReleaseSRWLockExclusive(&scarlet_address_lock); return 0xfa01;
+        }
+    }
+    ScarletAddressWaiter **link = &scarlet_address_waiters;
+    int32_t remaining = count;
+    while (*link && (count <= 0 || remaining > 0)) {
+        ScarletAddressWaiter *p = *link;
+        if (p->address != addr) { link = &p->next; continue; }
+        *link = p->next; p->signaled = 1; SetEvent(p->event);
+        if (count > 0) --remaining;
+    }
+    ReleaseSRWLockExclusive(&scarlet_address_lock);
+    return 0;
+}
+
 #endif
