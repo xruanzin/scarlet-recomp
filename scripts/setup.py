@@ -1109,6 +1109,7 @@ def step_lift(cx):
                      RECOMP_MODULE_MAP=module_map)
         if module == 'sdk':
             env['RECOMP_SCARLET_STDALLOC'] = '1'
+            env['RECOMP_SCARLET_THREADS'] = '1'
         late = scarlet_late_targets(module, cx.build)
         if late:
             env['RECOMP_EXTRA_STARTS'] = ','.join(hex(x) for x in late)
