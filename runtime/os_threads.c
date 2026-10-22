@@ -233,7 +233,7 @@ uint64_t os_main_thread_type(void) {
 }
 #else
 static uint8_t g_main_thread[0x400];
-uint64_t os_main_thread_type(void) { return os_main_thread_type(); }
+uint64_t os_main_thread_type(void) { return (uint64_t)(uintptr_t)g_main_thread; }
 #endif
 uint64_t g_main_stack_base, g_main_stack_size;        /* set by boot.c */
 static volatile LONG g_thread_count;
