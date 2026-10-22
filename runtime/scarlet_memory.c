@@ -258,7 +258,17 @@ int scarlet_memory_svc(Ctx *c, uint32_t n) {
     if (n == 6) {
         handled = 0;
         uint64_t addr = c->x[2];
-        for (unsigned i = 0; i < 256; ++i) {
+        AcquireSRWLockShared(&shmem_lock);
+        for (unsigned i = 0; i < SHMEM_LIMIT; ++i) {
+            SharedMem *m = &shmem[i];
+            if (m->mapped_addr && addr >= m->mapped_addr && addr - m->mapped_addr < m->size) {
+                uint64_t info[5] = {m->mapped_addr, m->size, 6, 3, 0};
+                memcpy((void *)(uintptr_t)c->x[0], info, sizeof info);
+                c->x[0] = 0; c->x[1] = 0; handled = 1; break;
+            }
+        }
+        ReleaseSRWLockShared(&shmem_lock);
+        for (unsigned i = 0; !handled && i < 256; ++i) {
             StackMap *m = &stack_maps[i];
             if (!m->size) continue;
             int source = addr >= m->src && addr < m->src + m->size;

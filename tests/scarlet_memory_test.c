@@ -52,6 +52,10 @@ int main(void) {
     uint64_t shared = 0x7066ea5000ULL;
     assert(shared_map(time, shared, 0x1000, 0) == 0);
     assert(shared_map(hid, shared + 0x1000, 0x2000, 0) == 0);
+    uint64_t shared_info[5] = {0};
+    c.x[0] = (uintptr_t)shared_info; c.x[2] = shared + 0x38;
+    assert(scarlet_memory_svc(&c, 6) && c.x[0] == 0);
+    assert(shared_info[0] == shared && shared_info[1] == 0x1000 && shared_info[2] == 6);
     assert(!strcmp((char *)(uintptr_t)shared, "time"));
     assert(!strcmp((char *)(uintptr_t)(shared + 0x1000), "hid"));
     assert(shared_map(hid, shared + 0x1000, 0x1000, 1) != 0);

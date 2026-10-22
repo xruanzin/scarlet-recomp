@@ -960,9 +960,6 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
         if (a >= SCARLET_HEAP_BASE && a < SCARLET_HEAP_BASE + g_scarlet_heap_size) {
             info[0] = SCARLET_HEAP_BASE; info[1] = g_scarlet_heap_size;
             info[2] = 5; info[3] = 3;
-        } else if (a >= SCARLET_GUEST_LO && a < 0x7010000000ULL) {
-            info[0] = SCARLET_GUEST_LO; info[1] = 0x0100000000ULL;
-            info[2] = 3; info[3] = 1;
         } else {
             MEMORY_BASIC_INFORMATION mi;
             if (VirtualQuery((void *)(uintptr_t)a, &mi, sizeof mi) && mi.State == MEM_COMMIT) {

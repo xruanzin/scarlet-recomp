@@ -28,7 +28,7 @@ LIFT_ABI_REV_BY_MODULE = {
 # Keep these sparse: recomp.py splits the containing function at each address,
 # so regenerating a module rewrites only the affected source bucket(s).
 LATE_INDIRECT_STARTS = {
-    "main": (0x7000a7a1f4, 0x7000a7a20c, 0x7000a7a26c, 0x7000a7d824, 0x7000a7d83c, 0x7000a7d848, 0x7000a7d958, 0x7000a7d988, 0x7000a7da98, 0x7000a7daec, 0x7000a7db24, 0x7000a7db34, 0x7000a7dbbc,),
+    "main": (0x70000511bc, 0x70000514c4, 0x7000051528, 0x7000051554, 0x7000051580, 0x7000a7a1f4, 0x7000a7a20c, 0x7000a7a26c, 0x7000a7d824, 0x7000a7d83c, 0x7000a7d848, 0x7000a7d958, 0x7000a7d988, 0x7000a7da98, 0x7000a7daec, 0x7000a7db24, 0x7000a7db34, 0x7000a7dbbc,),
     "sdk": (0x700657C59C, 0x700657CED8),
     "subsdk0": (),
 }
