@@ -279,6 +279,29 @@ def main():
         after = known_late_targets()
         new_targets = (after | found) - before
         if not new_targets:
+            # Make the final blocker visible in the shell. On Windows guest_trap()
+            # raises a private exception first, so both a true native crash and a
+            # guest trap can surface as process exit code 4. The log tells them apart.
+            if p.returncode and a.log:
+                try:
+                    with open(a.log, 'rb') as lf:
+                        lf.seek(log_start)
+                        run_text = lf.read().decode('utf-8', 'replace')
+                    markers = (
+                        'GUEST TRAP:', 'HOST EXCEPTION', 'UNTRANSLATED INSTRUCTION',
+                        'nvn: stopping:', 'nvn_vk: stopping:', 'FATAL:', 'fatal:'
+                    )
+                    pos = max((run_text.rfind(m) for m in markers), default=-1)
+                    if pos < 0:
+                        pos = max(0, len(run_text) - 12000)
+                    excerpt = run_text[pos:]
+                    if len(excerpt) > 12000:
+                        excerpt = excerpt[:12000] + '\n... [fatal excerpt truncated] ...\n'
+                    print('\n===== Scarlet final blocker from this boot =====')
+                    print(excerpt.rstrip())
+                    print('===== end Scarlet final blocker =====\n')
+                except OSError:
+                    pass
             return p.returncode
         if auto_count >= max_auto_late:
             print('Scarlet auto-relift stopped after %d restarts; latest new target(s): %s' %
