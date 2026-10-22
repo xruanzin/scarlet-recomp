@@ -1428,8 +1428,12 @@ static void analyze(Mx *e) {
                 if (ft == 0 || ft == 28) continue;
                 unsigned tgt = s.tgt[k];
                 s.n = k;
-                e->jt[pc] = tgt; e->leader[tgt] = 1; e->any_jump = 1;
+                /* Validate the token target before using it as an index. A malformed/out-of-range
+                 * SYNC/BRK/CONT target used to write e->leader[tgt] first; Scarlet compute program
+                 * #11278 reaches exactly this failure path, so the old order could corrupt the host heap
+                 * even though translation then reported "target outside the code". */
                 if (tgt >= e->words) { fail(e, mx_op_name[op], "target outside the code"); break; }
+                e->jt[pc] = tgt; e->leader[tgt] = 1; e->any_jump = 1;
                 if (nw >= cap) break;
                 wpc[nw] = tgt; wst[nw++] = (uint16_t)stk_id(e, &s);
                 if (always && ft == 15) break;
