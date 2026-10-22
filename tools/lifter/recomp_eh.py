@@ -64,6 +64,48 @@ def _scarlet_stdalloc_overrides():
     return out
 
 
+SCARLET_THREAD_SYMBOLS = {
+    "_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi": 0,
+    "_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mii": 1,
+    "_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE": 2,
+    "_ZN2nn2os10WaitThreadEPNS0_10ThreadTypeE": 3,
+    "_ZN2nn2os13DestroyThreadEPNS0_10ThreadTypeE": 4,
+    "_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc": 5,
+    "_ZN2nn2os17SetThreadCoreMaskEPNS0_10ThreadTypeEim": 6,
+    "_ZN2nn2os17GetThreadCoreMaskEPiPmPKNS0_10ThreadTypeE": 7,
+    "_ZN2nn2os16GetCurrentThreadEv": 8,
+    "_ZN2nn2os17GetThreadPriorityEPKNS0_10ThreadTypeE": 9,
+    "_ZN2nn2os24GetThreadCurrentPriorityEPKNS0_10ThreadTypeE": 9,
+    "_ZN2nn2os20ChangeThreadPriorityEPNS0_10ThreadTypeEi": 10,
+    "_ZN2nn2os11GetThreadIdEPKNS0_10ThreadTypeE": 11,
+}
+
+def _scarlet_thread_overrides():
+    if os.environ.get("RECOMP_SCARLET_THREADS", "") in ("", "0"):
+        return {}
+    out = {}
+    nsym = (STRTAB - SYMTAB) // 24
+    for i in range(nsym):
+        name_off, info_b, other, shndx, value, size = struct.unpack_from(
+            '<IBBHQQ', IMG, FILE_OFF + SYMTAB + i * 24)
+        if not shndx or not name_off:
+            continue
+        p = FILE_OFF + STRTAB + name_off
+        try:
+            name = IMG[p:IMG.index(b'\0', p)].decode('latin-1')
+        except ValueError:
+            continue
+        op = SCARLET_THREAD_SYMBOLS.get(name)
+        if op is not None:
+            out[BASE + value] = op
+    if out:
+        print("Scarlet nn::os thread HLE overrides: %s" %
+              ", ".join("%#x=>%d" % (a, out[a]) for a in sorted(out)))
+    else:
+        raise SystemExit("RECOMP_SCARLET_THREADS=1 but no nn::os thread symbols were found")
+    return out
+
+
 def _u32(o): return struct.unpack_from('<I', IMG, FILE_OFF + o)[0]
 def _s32(o): return struct.unpack_from('<i', IMG, FILE_OFF + o)[0]
 def _uleb(o):
@@ -193,6 +235,10 @@ def lift_function(env, entry):
     if op is not None:
         return ("void f_%x(Ctx *c) { c->fn = 0x%xULL; scarlet_stdalloc_hle(c, %d); }" %
                 (entry, entry, op), 0, [], [])
+    op = getattr(env, "scarlet_threads", {}).get(entry)
+    if op is not None:
+        return ("void f_%x(Ctx *c) { c->fn = 0x%xULL; scarlet_os_thread_hle(c, %d); }" %
+                (entry, entry, op), 0, [], [])
     plt = env.plt_entry(entry)
     if plt:
         text, n, bad = recomp.lift_function(env, entry)
@@ -239,13 +285,14 @@ def lift_function(env, entry):
 _worker_env = None
 
 
-def _worker_init(starts, stdalloc):
+def _worker_init(starts, stdalloc, threads):
     global _worker_env
     _worker_env = Env()
     _worker_env.imports = set()
     _worker_env.full = True
     _worker_env.starts = starts
     _worker_env.scarlet_stdalloc = stdalloc
+    _worker_env.scarlet_threads = threads
 
 
 def _worker_scan(entries):
@@ -276,6 +323,8 @@ def _worker_write(job):
         prefix += 'uint64_t guest_tpidrro(Ctx *c);\n'
     if 'scarlet_stdalloc_hle(c,' in body:
         prefix += 'void scarlet_stdalloc_hle(Ctx *c, int op);\n'
+    if 'scarlet_os_thread_hle(c,' in body:
+        prefix += 'void scarlet_os_thread_hle(Ctx *c, int op);\n'
     content = prefix + '\n' + body + '\n'
     path = os.path.join(outdir, name)
     if os.path.exists(path):
@@ -298,7 +347,9 @@ def main(outdir, jobs):
     env.imports = set()
     env.full = True
     stdalloc = _scarlet_stdalloc_overrides()
+    threads = _scarlet_thread_overrides()
     env.scarlet_stdalloc = stdalloc
+    env.scarlet_threads = threads
     starts_set = set(env.compute_starts()) | set(info['starts'])
 
     # Belt-and-suspenders for Scarlet late indirect targets: merge the
@@ -330,7 +381,7 @@ def main(outdir, jobs):
     all_funcs = []
     total = bad = 0
     bad_reasons = collections.Counter()
-    with multiprocessing.Pool(jobs, _worker_init, (starts, stdalloc)) as pool:
+    with multiprocessing.Pool(jobs, _worker_init, (starts, stdalloc, threads)) as pool:
         while pending:
             pending.sort()
             parts = [pending[i:i + 400] for i in range(0, len(pending), 400)]
