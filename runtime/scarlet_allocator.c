@@ -262,9 +262,17 @@ void scarlet_stdalloc_dispatch(Ctx *c, int op) {
                      (unsigned long long)STD_BASE, (unsigned long long)STD_LIMIT);
         return;
     case STD_ALLOC:
+        if (c->x[1] >= 0x10000)
+            trace_printf("Scarlet StandardAllocator call op=alloc this=%llx size=%llx align=10 lr=%llx\n",
+                         (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+                         (unsigned long long)c->x[30]);
         c->x[0] = alloc_guest(c->x[1], 16);
         return;
     case STD_ALLOC_ALIGNED:
+        if (c->x[1] >= 0x10000)
+            trace_printf("Scarlet StandardAllocator call op=alloc_aligned this=%llx size=%llx align=%llx lr=%llx\n",
+                         (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+                         (unsigned long long)c->x[2], (unsigned long long)c->x[30]);
         c->x[0] = alloc_guest(c->x[1], c->x[2]);
         return;
     case STD_FREE:
