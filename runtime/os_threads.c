@@ -504,8 +504,13 @@ static void os_AllocateTlsSlot(Ctx *c) {
 static void os_FreeTlsSlot(Ctx *c) { uint32_t i = (uint32_t)A0 & 63; g_tls_dtor[i] = 0; InterlockedExchange(&g_tls_used[i], 0); }
 static void tls_run_destructors(Ctx *c) {
     for (int i = 0; i < 64; i++) {
+#ifdef SCARLET_RECOMP
+        uint64_t v = scarlet_sdk_tls_value(c, (uint32_t)i), fn = g_tls_dtor[i];
+        scarlet_sdk_set_tls_value(c, (uint32_t)i, 0);
+#else
         uint64_t v = t_tls[i], fn = g_tls_dtor[i];
         t_tls[i] = 0;
+#endif
         if (v && fn && g_tls_used[i]) { c->x[0] = v; call_guest(c, fn); }
     }
 }
