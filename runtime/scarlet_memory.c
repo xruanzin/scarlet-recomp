@@ -54,15 +54,31 @@ void *scarlet_bootstrap_stack_reserve(size_t size) {
         if (stack_full_reservation) {
             p = (void *)(uintptr_t)bootstrap_stack_base;
         } else {
-            p = VirtualAlloc((void *)(uintptr_t)bootstrap_stack_base, (SIZE_T)size,
-                             MEM_RESERVE, PAGE_NOACCESS);
-            if (p != (void *)(uintptr_t)bootstrap_stack_base) {
+            /* Sparse fallback: look from the top down in Windows allocation-
+             * granularity steps. A DLL/ASLR mapping anywhere else in the 1 GiB
+             * Horizon stack region must not prevent the process main stack. */
+            uint64_t candidate = bootstrap_stack_base;
+            for (;;) {
+                p = VirtualAlloc((void *)(uintptr_t)candidate, (SIZE_T)size,
+                                 MEM_RESERVE, PAGE_NOACCESS);
+                if (p == (void *)(uintptr_t)candidate) {
+                    bootstrap_stack_base = candidate;
+                    stack_reservation = p;
+                    printf("Scarlet stack region: full 1 GiB reservation unavailable; using sparse bootstrap window %llx..%llx\n",
+                           (unsigned long long)candidate,
+                           (unsigned long long)(candidate + size));
+                    trace_printf("Scarlet sparse bootstrap stack reservation %llx..%llx\n",
+                                 (unsigned long long)candidate,
+                                 (unsigned long long)(candidate + size));
+                    break;
+                }
                 if (p) VirtualFree(p, 0, MEM_RELEASE);
                 p = NULL;
-                bootstrap_stack_base = bootstrap_stack_size = 0;
-            } else {
-                stack_reservation = p;
+                if (candidate < STACK_BASE + 0x10000 ||
+                    candidate - 0x10000 < STACK_BASE) break;
+                candidate -= 0x10000;
             }
+            if (!p) bootstrap_stack_base = bootstrap_stack_size = 0;
         }
     }
     ReleaseSRWLockExclusive(&map_lock);
