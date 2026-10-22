@@ -53,6 +53,7 @@ def run_module(name, bin_dir, out_root, jobs):
     env["RECOMP_BASE"] = hex(profile.MODULE_BASES[name])
     if name == "sdk":
         env["RECOMP_SCARLET_STDALLOC"] = "1"
+        env["RECOMP_SCARLET_THREADS"] = "1"
     late = late_targets_for(name)
     if late:
         env["RECOMP_EXTRA_STARTS"] = ",".join(hex(x) for x in late)
