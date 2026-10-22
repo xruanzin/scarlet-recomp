@@ -270,6 +270,17 @@ static int main_host_override(const char *name) {
         "_ZN2nn2os11GetTlsValueENS0_7TlsSlotE",
         "memcpy",
         "strcmp",
+        "_ZN2nn2vi10InitializeEv",
+        "_ZN2nn2vi8FinalizeEv",
+        "_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE",
+        "_ZN2nn2vi12CloseDisplayEPNS0_7DisplayE",
+        "_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE",
+        "_ZN2nn2vi12DestroyLayerEPNS0_5LayerE",
+        "_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE",
+        "_ZN2nv18InitializeGraphicsEPvm",
+        "_ZN2nv16FinalizeGraphicsEv",
+        "_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_",
+        "nvnBootstrapLoader",
     };
     for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
         if (!strcmp(name, names[i])) return 1;

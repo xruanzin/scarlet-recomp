@@ -44,6 +44,9 @@ int main(void) {
     symbol(sdk, 2, 64, "_ZNSt3__18numpunctIcE2idE", 1, 1, 1100);
     host_overrides[6] = 0x99990000;
     assert(resolve_symbol(main, 6) == sdk->base + 1100);
+    symbol(main, 7, 240, "_ZN2nn2vi10InitializeEv", 0, 1, 0);
+    symbol(sdk, 3, 128, "_ZN2nn2vi10InitializeEv", 1, 1, 1300);
+    assert(resolve_symbol(main, 7) == IMPORT_BASE + 7 * IMPORT_SLOT);
     puts("Scarlet loader: SDK facet identity, host function/fallback, own and weak symbols passed");
     return 0;
 }

@@ -198,6 +198,8 @@ def main(argv=None):
         "runtime_ready": True,
         "runtime_blocker": None,
         "static_loader": "runtime/scarlet_loader.c",
+        "host_override_symbols": list(profile.HLE_OVERRIDE_SYMBOLS),
+        "lift_root": lift,
     }
     write_if_changed(
         os.path.join(out, "scarlet_combined_manifest.json"),

@@ -20,7 +20,7 @@ MAIN_BUILD_ID_PREFIX = MAIN_BUILD_ID[:16]
 STATIC_MODULES = ("main", "sdk", "subsdk0")
 LIFT_ABI_REV = "scarlet-tpidrro-v1"
 LIFT_ABI_REV_BY_MODULE = {
-    "main": "scarlet-tpidrro-v1",
+    "main": "scarlet-host-graphics-v2",
     "sdk": "scarlet-stdalloc-v1",
     "subsdk0": "scarlet-tpidrro-v1",
 }
@@ -28,7 +28,7 @@ LIFT_ABI_REV_BY_MODULE = {
 # Keep these sparse: recomp.py splits the containing function at each address,
 # so regenerating a module rewrites only the affected source bucket(s).
 LATE_INDIRECT_STARTS = {
-    "main": (),
+    "main": (0x7000a7a1f4, 0x7000a7a20c, 0x7000a7a26c, 0x7000a7d824, 0x7000a7d83c, 0x7000a7d848, 0x7000a7d958, 0x7000a7d988, 0x7000a7da98, 0x7000a7daec, 0x7000a7db24, 0x7000a7db34, 0x7000a7dbbc,),
     "sdk": (0x700657C59C, 0x700657CED8),
     "subsdk0": (),
 }
@@ -63,4 +63,17 @@ HLE_OVERRIDE_SYMBOLS = (
     "_ZN2nn2os11GetTlsValueENS0_7TlsSlotE",
     "memcpy",
     "strcmp",
+    # The host renderer owns the native display and NVN device. These public
+    # entry points also form the renderer boundary in scarlet_pc/runtime/hle.
+    "_ZN2nn2vi10InitializeEv",
+    "_ZN2nn2vi8FinalizeEv",
+    "_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE",
+    "_ZN2nn2vi12CloseDisplayEPNS0_7DisplayE",
+    "_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE",
+    "_ZN2nn2vi12DestroyLayerEPNS0_5LayerE",
+    "_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE",
+    "_ZN2nv18InitializeGraphicsEPvm",
+    "_ZN2nv16FinalizeGraphicsEv",
+    "_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_",
+    "nvnBootstrapLoader",
 )

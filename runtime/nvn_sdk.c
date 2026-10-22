@@ -1,3 +1,43 @@
+/* Scarlet uses the host renderer's Tegra layout. The SSBU SDK oracle below
+ * has different image addresses and must never execute against Scarlet. */
+#ifdef SCARLET_RECOMP
+#include "nvn_sdk.h"
+#include "tex_decode.h"
+#include "hostrt.h"
+#include <string.h>
+#include <stdio.h>
+static void scarlet_layout(const NvnSdkTexBuilder *b, TexLayout *l) {
+    if (b->glname || !tex_format(b->format)) {
+        fprintf(stderr, "Scarlet NVN: unsupported texture format %u or GL import %u\n", b->format, b->glname);
+        report_and_exit(3);
+    }
+    tex_layout(l, b->target, b->format, b->width, b->height, b->depth,
+               b->levels, b->flags, b->stride,
+               b->has_layout ? (int)(b->layout & 0xff) : -1);
+}
+uint64_t nvn_sdk_texture_storage_alignment(Ctx *c, const NvnSdkTexBuilder *b) {
+    TexLayout l; (void)c; scarlet_layout(b, &l);
+    return (b->flags & 0x50) || b->target == TEX_TARGET_BUFFER ? 32 : 512;
+}
+uint64_t nvn_sdk_texture_storage_size(Ctx *c, const NvnSdkTexBuilder *b) {
+    TexLayout l; (void)c; scarlet_layout(b, &l);
+    if (b->target == TEX_TARGET_BUFFER) return (uint64_t)b->width * l.bpb;
+    return l.size * (b->samples > 1 ? b->samples : 1);
+}
+/* Host memory pools have no Tegra GPU memory kind. */
+uint32_t nvn_sdk_texture_storage_class(Ctx *c, const NvnSdkTexBuilder *b) { (void)c; (void)b; return 0; }
+uint32_t nvn_sdk_texture_raw_storage_class(Ctx *c, const NvnSdkTexBuilder *b) { return nvn_sdk_texture_storage_class(c,b); }
+void nvn_sdk_texture_sparse_layout(Ctx *c, const NvnSdkTexBuilder *b, uint32_t out[4]) {
+    (void)c; (void)b; (void)out;
+    fprintf(stderr, "Scarlet NVN: sparse texture layout is not implemented\n"); report_and_exit(3);
+}
+int nvn_sdk_tex_storage_class(Ctx *c,const NvnSdkTexBuilder *b,uint32_t *out) { if(b->glname)return 0; *out=nvn_sdk_texture_storage_class(c,b);return 1; }
+int nvn_sdk_tex_raw_storage_class(Ctx *c,const NvnSdkTexBuilder *b,uint32_t *out) { if(b->glname)return 0; *out=nvn_sdk_texture_raw_storage_class(c,b);return 1; }
+int nvn_sdk_tex_sparse_layout(Ctx *c,const NvnSdkTexBuilder *b,uint32_t out[4]) { if(b->glname)return 0; nvn_sdk_texture_sparse_layout(c,b,out);return 1; }
+int nvn_sdk_tex_storage_size(Ctx *c,const NvnSdkTexBuilder *b,uint32_t *out) { if(b->glname)return 0; *out=(uint32_t)nvn_sdk_texture_storage_size(c,b);return 1; }
+int nvn_sdk_format_known(uint32_t f) { return tex_format(f)!=NULL; }
+int nvn_sdk_selftest(Ctx *c) { (void)c; return 0; }
+#else
 /* NVN functions answered by the SDK's own code (lifted from binaries\13.0.4\sdk.elf by sdklift.py).
  *
  *   nvnTextureBuilderGetStorageAlignment [sdk 0x4278b0]
@@ -254,3 +294,5 @@ int nvn_sdk_selftest(Ctx *c) {
     bad += nvn_c5_selftest(c);
     return bad;
 }
+
+#endif /* SCARLET_RECOMP */

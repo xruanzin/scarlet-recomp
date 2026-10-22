@@ -40,6 +40,7 @@ suyu (RECOMP_NOCRT, tools/lifter/build.py). The package is used only by the tree
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import struct
@@ -1199,7 +1200,45 @@ def copy_ffmpeg(cx):
     return len(names)
 
 
+def refresh_scarlet_host_imports(cx):
+    """Refresh main's host wrappers and late targets without rebuilding other modules.
+
+    Content-aware object hashes retain every unchanged lifted translation unit.
+    The existing SDK/subsdk lift (including late targets) is reused in place.
+    """
+    combined = os.path.join(cx.work, 'gen_eh_o2')
+    manifest_path = os.path.join(combined, 'scarlet_combined_manifest.json')
+    try:
+        with open(manifest_path, encoding='utf-8') as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return
+    table_path = os.path.join(combined, 'table.c')
+    with open(table_path, encoding='utf-8') as f:
+        table = f.read()
+    missing_main = [x for x in scarlet_late_targets('main', cx.build)
+                    if not re.search(r'\{\s*0x%xULL\s*,' % x, table)]
+    if manifest.get('host_override_symbols') == list(profile.HLE_OVERRIDE_SYMBOLS) and not missing_main:
+        return
+    candidates = [manifest.get('lift_root'), os.path.join(cx.build, 'lift'),
+                  os.path.join(cx.work, 'lift_modules')]
+    root = next((p for p in candidates if p and all(
+        os.path.isfile(os.path.join(p, m, 'table.c')) for m in profile.STATIC_MODULES)), None)
+    if not root:
+        raise Fail('Scarlet host import update needs the existing module lift; rerun --from lift')
+    say('  Scarlet main imports/late targets changed: refreshing only main; retaining SDK/subsdk and unchanged objects')
+    module_map = os.path.join(cx.build, 'scarlet_module_map.json')
+    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_module_map.py'),
+                   '--bin', cx.bin, '--out', module_map], env=cx.env(), log='module_map')
+    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_lift_probe.py'),
+                   '--module', 'main', '--bin', cx.bin, '--out', root, '--jobs', str(cx.lift_jobs)],
+           env=cx.env(), cwd=REPO, log='lift_main_host_imports')
+    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_combine_lift.py'),
+                   '--lift', root, '--out', combined, '--module-map', module_map], env=cx.env(), log='combine_lift')
+
+
 def step_compile(cx):
+    refresh_scarlet_host_imports(cx)
     if cx.posix:
         say('  up to %d compilers at once, sharing the RAM (logs/compile.log shows the progress)' % cx.jobs)
     cx.run('compile', [sys.executable, 'build_opt.py', 'main', str(cx.jobs)], env=build_env(cx))

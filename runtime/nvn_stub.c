@@ -210,6 +210,7 @@ static const ImportDef nvn_imports[] = {
     {"_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", keep},
     {"_ZN2nv28SetGraphicsDevtoolsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", keep},
     {"_ZN2nv18InitializeGraphicsEPvm", keep},
+    {"_ZN2nv16FinalizeGraphicsEv", keep},
 };
 
 void register_nvn_imports(void) {
