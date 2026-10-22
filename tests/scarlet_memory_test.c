@@ -4,10 +4,15 @@
 void trace_printf(const char *fmt, ...) { (void)fmt; }
 int main(void) {
     /* Guest-free pages inside a larger host reservation can hold shared memory. */
-    void *arena = VirtualAlloc(NULL, 0x20000, MEM_RESERVE, PAGE_NOACCESS);
+    void *arena = VirtualAlloc((void *)(uintptr_t)0x7060000000ULL, 0x20000, MEM_RESERVE, PAGE_NOACCESS);
     assert(arena);
     uint64_t shared_at = (uintptr_t)arena + 0x3000;
     assert(shared_vm_map(shared_at, 0x1000));
+    uint64_t guard_info[5];
+    assert(scarlet_query_free_region((uintptr_t)arena - 0x1000, guard_info));
+    assert(guard_info[0] + guard_info[1] == shared_at);
+    assert(scarlet_query_free_region((uintptr_t)arena + 0x1000, guard_info));
+    assert(guard_info[0] + guard_info[1] == shared_at);
     *(volatile unsigned char *)(uintptr_t)shared_at = 42;
     shared_vm_unmap(shared_at, 0x1000);
     MEMORY_BASIC_INFORMATION reserved_info;

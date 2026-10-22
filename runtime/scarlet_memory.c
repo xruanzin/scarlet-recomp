@@ -55,8 +55,18 @@ int scarlet_query_free_region(uint64_t addr, uint64_t info[5]) {
     const uint64_t address_limit = 1ULL << 39;
     if (addr >= address_limit || !VirtualQuery((void *)(uintptr_t)addr, &mi, sizeof mi) || mi.State == MEM_COMMIT) return 0;
     uint64_t base = (uint64_t)(uintptr_t)mi.BaseAddress;
-    uint64_t size = mi.RegionSize;
-    if (size > address_limit - base) size = address_limit - base;
+    uint64_t end = base + mi.RegionSize;
+    /* Windows splits MEM_FREE and MEM_RESERVE at allocation boundaries. Both
+     * are guest-free until committed; Horizon's guard-range check must see a
+     * single gap even when its 16KiB guard straddles a 64KiB reservation edge. */
+    MEMORY_BASIC_INFORMATION adjacent;
+    if (end > address_limit) end = address_limit;
+    while (end < address_limit && VirtualQuery((void *)(uintptr_t)end, &adjacent, sizeof adjacent) && adjacent.State != MEM_COMMIT) {
+        uint64_t next = (uint64_t)(uintptr_t)adjacent.BaseAddress + adjacent.RegionSize;
+        if (next <= end) break;
+        end = next > address_limit ? address_limit : next;
+    }
+    uint64_t size = end - base;
     if (bootstrap_stack_size && addr < bootstrap_stack_base && base + size > bootstrap_stack_base)
         size = bootstrap_stack_base - base;
     memset(info, 0, 5 * sizeof *info);

@@ -20,6 +20,8 @@ static SRWLOCK thread_lock = SRWLOCK_INIT;
 static ScarletThread *threads[THREAD_LIMIT];
 static __declspec(thread) ScarletThread *current_thread;
 static uint64_t next_id = 0x51;
+static volatile LONG launched_threads;
+int scarlet_thread_count(void) { return (int)InterlockedCompareExchange(&launched_threads, 0, 0); }
 static ScarletThread *lookup(uint32_t h) {
     if (h == 0xffff8000) return current_thread;
     return h >= THREAD_BASE && h < THREAD_BASE + THREAD_LIMIT ? threads[h - THREAD_BASE] : NULL;
@@ -110,7 +112,7 @@ int scarlet_thread_svc(Ctx *c, uint32_t n) {
             if (t->started) { x[0] = 0xfa01; break; }
             t->host = CreateThread(NULL, (SIZE_T)256 << 20, run_thread, t, CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
             if (!t->host) { x[0] = 0xd201; break; }
-            t->started = 1; ++t->refs;
+            t->started = 1; ++t->refs; InterlockedIncrement(&launched_threads);
             ResumeThread(t->host); x[0] = 0; break;
         case 0x0c: x[0] = 0; x[1] = t->priority; break;
         case 0x0d:

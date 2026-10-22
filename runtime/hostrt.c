@@ -974,6 +974,7 @@ static int scarlet_svc_basic(Ctx *c, uint32_t n) {
                 }
             }
         }
+        trace_printf("Scarlet QueryMemory addr=%llx base=%llx size=%llx state=%llx\n", (unsigned long long)a, (unsigned long long)info[0], (unsigned long long)info[1], (unsigned long long)info[2]);
         memcpy((void *)(uintptr_t)out, info, sizeof info);
         x[0] = 0; x[1] = 0;
         return 1;

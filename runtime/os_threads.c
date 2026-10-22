@@ -1130,4 +1130,11 @@ static const ImportDef thread_imports[] = {
 void register_thread_imports(void) {
     register_imports(thread_imports, (int)(sizeof thread_imports / sizeof thread_imports[0]));
 }
-int guest_thread_count(void) { return (int)g_thread_count; }
+int guest_thread_count(void) {
+#ifdef SCARLET_RECOMP
+    extern int scarlet_thread_count(void);
+    return scarlet_thread_count();
+#else
+    return (int)g_thread_count;
+#endif
+}

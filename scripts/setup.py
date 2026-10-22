@@ -1201,10 +1201,10 @@ def copy_ffmpeg(cx):
 
 
 def refresh_scarlet_host_imports(cx):
-    """Refresh main's host wrappers and late targets without rebuilding other modules.
+    """Refresh only modules with changed host wrappers or missing late targets.
 
     Content-aware object hashes retain every unchanged lifted translation unit.
-    The existing SDK/subsdk lift (including late targets) is reused in place.
+    Unchanged module lifts and their compiled objects are reused in place.
     """
     combined = os.path.join(cx.work, 'gen_eh_o2')
     manifest_path = os.path.join(combined, 'scarlet_combined_manifest.json')
@@ -1216,9 +1216,12 @@ def refresh_scarlet_host_imports(cx):
     table_path = os.path.join(combined, 'table.c')
     with open(table_path, encoding='utf-8') as f:
         table = f.read()
-    missing_main = [x for x in scarlet_late_targets('main', cx.build)
-                    if not re.search(r'\{\s*0x%xULL\s*,' % x, table)]
-    if manifest.get('host_override_symbols') == list(profile.HLE_OVERRIDE_SYMBOLS) and not missing_main:
+    refresh_modules = [m for m in profile.STATIC_MODULES if any(
+        not re.search(r'\{\s*0x%xULL\s*,' % x, table)
+        for x in scarlet_late_targets(m, cx.build))]
+    if manifest.get('host_override_symbols') != list(profile.HLE_OVERRIDE_SYMBOLS) and 'main' not in refresh_modules:
+        refresh_modules.insert(0, 'main')
+    if not refresh_modules:
         return
     candidates = [manifest.get('lift_root'), os.path.join(cx.build, 'lift'),
                   os.path.join(cx.work, 'lift_modules')]
@@ -1226,13 +1229,14 @@ def refresh_scarlet_host_imports(cx):
         os.path.isfile(os.path.join(p, m, 'table.c')) for m in profile.STATIC_MODULES)), None)
     if not root:
         raise Fail('Scarlet host import update needs the existing module lift; rerun --from lift')
-    say('  Scarlet main imports/late targets changed: refreshing only main; retaining SDK/subsdk and unchanged objects')
+    say('  Scarlet imports/late targets changed: refreshing %s; retaining unchanged objects' % ', '.join(refresh_modules))
     module_map = os.path.join(cx.build, 'scarlet_module_map.json')
     cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_module_map.py'),
                    '--bin', cx.bin, '--out', module_map], env=cx.env(), log='module_map')
-    cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_lift_probe.py'),
-                   '--module', 'main', '--bin', cx.bin, '--out', root, '--jobs', str(cx.lift_jobs)],
-           env=cx.env(), cwd=REPO, log='lift_main_host_imports')
+    for module in refresh_modules:
+        cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_lift_probe.py'),
+                       '--module', module, '--bin', cx.bin, '--out', root, '--jobs', str(cx.lift_jobs)],
+               env=cx.env(), cwd=REPO, log='lift_' + module + '_incremental')
     cx.run('lift', [sys.executable, os.path.join(REPO, 'scripts', 'scarlet_combine_lift.py'),
                    '--lift', root, '--out', combined, '--module-map', module_map], env=cx.env(), log='combine_lift')
 
