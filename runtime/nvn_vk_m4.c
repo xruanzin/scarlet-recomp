@@ -2095,11 +2095,13 @@ static int cont_walk(uint64_t base, uint64_t size, int tag, int *njobs, uint64_t
     vars = CW_RB(vars);
     if (vars < size) vars += base;                 /* not relocated yet */
     if (nvar <= 0 || nvar > 200000 || vars < base || vars + (uint64_t)nvar * 0x40 > end) return -1;
+#ifndef SCARLET_RECOMP
     if (g_game_tables) {                           /* the game's own offset tables (13.0.4); the defaults above are what they held when read */
         uint64_t t = g64(GA(0x71052a32d8ull));
         for (int i = 0; i < 3 && t; i++) { uint64_t v = g64(t + (uint64_t)i * 8); if (v < 0x40) voff[i] = v; }
         for (int i = 0; i < 6; i++) { uint64_t v = g64(GA(0x7104470aa8ull) + (uint64_t)i * 8); if (v && v < 0x70) soff[i] = v; }
     }
+#endif /* SSBU engine offset tables; other titles use the container defaults. */
     for (int v = 0; v < nvar; v++) {
         SSrc s[3];
         int has[3] = {0, 0, 0}, bad = 0;
